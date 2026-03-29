@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 
 const User = require("../models/user.model");
 const { getRequiredEnv } = require("../config/runtime");
+const { sendError } = require("../utils/http");
 
 const resolveUserByToken = async (token) => {
   if (!token) return null;
@@ -22,18 +23,30 @@ const authMiddleware = async (req, res, next) => {
       : null;
 
     if (!token) {
-      return res.status(401).json({ message: "No autenticado" });
+      return sendError(res, {
+        status: 401,
+        code: "AUTH_REQUIRED",
+        message: "No autenticado",
+      });
     }
 
     const user = await resolveUserByToken(token);
     if (!user) {
-      return res.status(401).json({ message: "Sesion invalida" });
+      return sendError(res, {
+        status: 401,
+        code: "INVALID_SESSION",
+        message: "Sesion invalida",
+      });
     }
 
     req.user = user;
     return next();
   } catch {
-    return res.status(401).json({ message: "Token invalido o expirado" });
+    return sendError(res, {
+      status: 401,
+      code: "INVALID_TOKEN",
+      message: "Token invalido o expirado",
+    });
   }
 };
 

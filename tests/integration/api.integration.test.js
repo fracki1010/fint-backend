@@ -470,6 +470,18 @@ describe("API integration", () => {
   it("protege endpoint de WhatsApp cuando no hay autenticacion", async () => {
     const response = await request(app).get("/api/whatsapp/status");
     expect(response.status).toBe(401);
+    expect(response.body.error.code).toBe("AUTH_REQUIRED");
+    expect(response.body.requestId).toBeTruthy();
+  });
+
+  it("rechaza token invalido con formato de error estandar", async () => {
+    const response = await request(app)
+      .get("/api/clients")
+      .set("Authorization", "Bearer token-falso");
+
+    expect(response.status).toBe(401);
+    expect(response.body.error.code).toBe("INVALID_TOKEN");
+    expect(response.body.requestId).toBeTruthy();
   });
 
   it("solo superadmin puede crear usuarios", async () => {
