@@ -3,6 +3,7 @@ require("dotenv").config();
 const connectDB = require("./src/config/db"); // 👈 1. Importamos la conexión
 const { createApp } = require("./src/app");
 const { validateRuntimeConfig } = require("./src/config/runtime");
+const { logInfo } = require("./src/utils/logger");
 // const { initializeWhatsApp } = require("./src/services/whatsappService"); // Comentado para evitar levantar WhatsApp al iniciar el servidor
 
 const PORT = process.env.PORT || 5000;
@@ -16,5 +17,5 @@ connectDB();
 // initializeWhatsApp();
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
+  logInfo("server_started", { port: Number(PORT) });
 });

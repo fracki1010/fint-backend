@@ -18,9 +18,10 @@ function inferResourceId(req) {
 }
 
 function auditMiddleware(req, res, next) {
-  const requestId = randomUUID();
+  const requestId = req.requestId || randomUUID();
   const startedAt = Date.now();
   req.requestId = requestId;
+  res.locals.requestId = requestId;
 
   res.on("finish", async () => {
     const pathname = req.originalUrl.split("?")[0] || "";

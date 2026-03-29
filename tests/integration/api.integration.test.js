@@ -57,6 +57,12 @@ afterAll(async () => {
 });
 
 describe("API integration", () => {
+  it("incluye X-Request-Id en respuestas", async () => {
+    const response = await request(app).get("/api/health");
+    expect(response.status).toBe(200);
+    expect(response.headers["x-request-id"]).toBeTruthy();
+  });
+
   it("deshabilita bootstrap-superadmin en produccion", async () => {
     const previousNodeEnv = process.env.NODE_ENV;
     try {
@@ -91,6 +97,7 @@ describe("API integration", () => {
 
     expect(invalidLoginResponse.status).toBe(401);
     expect(invalidLoginResponse.body.error.code).toBe("INVALID_CREDENTIALS");
+    expect(invalidLoginResponse.body.requestId).toBeTruthy();
   });
 
   it("descuenta stock en venta entregada y revierte al cancelar orden", async () => {

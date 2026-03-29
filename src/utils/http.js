@@ -1,4 +1,5 @@
 const isProduction = () => process.env.NODE_ENV === "production";
+const { logError } = require("./logger");
 
 class HttpError extends Error {
   constructor(status, code, message, details = null) {
@@ -16,6 +17,7 @@ const normalizeValidationDetails = (issues = []) =>
   }));
 
 const sendError = (res, { status = 500, code, message, details = null }) => {
+  const requestId = res?.locals?.requestId || null;
   const payload = {
     error: {
       code: code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR"),
@@ -28,11 +30,21 @@ const sendError = (res, { status = 500, code, message, details = null }) => {
   if (details && (!isProduction() || status < 500)) {
     payload.error.details = details;
   }
+  if (requestId) {
+    payload.requestId = requestId;
+  }
 
   return res.status(status).json(payload);
 };
 
 const handleServerError = (res, error, fallbackMessage) => {
+  logError("handled_error", {
+    requestId: res?.locals?.requestId || "",
+    status: error?.status || error?.statusCode || 500,
+    code: error?.code || "INTERNAL_ERROR",
+    message: error?.message || "unknown_error",
+  });
+
   if (error instanceof HttpError) {
     return sendError(res, {
       status: error.status,

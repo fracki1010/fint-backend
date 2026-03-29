@@ -3,9 +3,12 @@ const cors = require("cors");
 const helmet = require("helmet");
 
 const authMiddleware = require("./middlewares/authMiddleware");
+const requestContextMiddleware = require("./middlewares/requestContextMiddleware");
+const requestLoggerMiddleware = require("./middlewares/requestLoggerMiddleware");
 const auditMiddleware = require("./middlewares/auditMiddleware");
 const { parseCorsOrigins } = require("./config/runtime");
 const { sendError } = require("./utils/http");
+const { logError } = require("./utils/logger");
 
 function createApp(options = {}) {
   const allowedOrigins = options.allowedOrigins || parseCorsOrigins();
@@ -26,6 +29,8 @@ function createApp(options = {}) {
     }),
   );
   app.use(express.json());
+  app.use(requestContextMiddleware);
+  app.use(requestLoggerMiddleware);
   app.use(auditMiddleware);
 
   app.use("/api/auth", require("./routes/authRoutes"));
@@ -48,7 +53,14 @@ function createApp(options = {}) {
     res.json({ status: "OK", message: "Servidor y Bot funcionando" });
   });
 
-  app.use((err, _req, res, _next) => {
+  app.use((err, req, res, _next) => {
+    logError("unhandled_error", {
+      requestId: req.requestId || res.locals?.requestId || "",
+      path: req.originalUrl || req.path || "",
+      method: req.method,
+      message: err?.message || "unknown_error",
+    });
+
     if (err?.message === "Origen no permitido por CORS") {
       return sendError(res, {
         status: 403,
