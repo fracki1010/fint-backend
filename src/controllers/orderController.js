@@ -3,6 +3,7 @@ const Order = require("../models/order.model");
 const { Product } = require("../models/product.model");
 const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
+const IdempotencyKey = require("../models/idempotencyKey.model");
 const {
   createAndDispatchNotification,
 } = require("../services/notificationService");
@@ -188,6 +189,24 @@ const getOrderSettings = async (tenantId) => {
   };
 };
 
+const IDEMPOTENCY_SCOPES = {
+  CREATE: "order:create",
+  UPDATE: "order:update",
+};
+
+const getIdempotencyKey = (req) => {
+  const raw = req.headers?.["idempotency-key"];
+  if (!raw || typeof raw !== "string") return null;
+  const key = raw.trim();
+  return key ? key : null;
+};
+
+const getReplayPayload = async ({ tenantId, resourceId }) => {
+  if (!resourceId) return null;
+  const payload = await populateOrderWithMovements(resourceId, tenantId);
+  return payload.order || null;
+};
+
 const reserveOrderNumber = async (settingsSnapshot, session) => {
   const prefix = settingsSnapshot.orderPrefix || "VTA";
   const filter = settingsSnapshot.settingsId
@@ -279,8 +298,31 @@ exports.getOrderById = async (req, res) => {
 // Crear una nueva orden
 exports.createOrder = async (req, res) => {
   const session = await mongoose.startSession();
+  let sessionClosed = false;
+  const tenantId = req.user?.tenant;
+  const actorUserId = req.user?._id;
+  const idempotencyKey = getIdempotencyKey(req);
 
   try {
+    if (idempotencyKey) {
+      const existingKey = await IdempotencyKey.findOne({
+        tenant: tenantId,
+        scope: IDEMPOTENCY_SCOPES.CREATE,
+        key: idempotencyKey,
+      }).lean();
+
+      if (existingKey) {
+        const replayOrder = await getReplayPayload({
+          tenantId,
+          resourceId: existingKey.resourceId,
+        });
+        if (replayOrder) {
+          res.setHeader("Idempotent-Replayed", "true");
+          return res.status(200).json(replayOrder);
+        }
+      }
+    }
+
     session.startTransaction();
 
     const {
@@ -295,8 +337,6 @@ exports.createOrder = async (req, res) => {
       paymentStatus,
       deliveryStatus,
     } = req.body;
-    const tenantId = req.user?.tenant;
-    const actorUserId = req.user?._id;
     const orderSettings = await getOrderSettings(tenantId);
 
     const nextSalesStatus =
@@ -359,9 +399,24 @@ exports.createOrder = async (req, res) => {
     }
 
     await newOrder.save({ session });
+    if (idempotencyKey) {
+      await IdempotencyKey.create(
+        [
+          {
+            tenant: tenantId,
+            scope: IDEMPOTENCY_SCOPES.CREATE,
+            key: idempotencyKey,
+            resourceType: "order",
+            resourceId: newOrder._id,
+          },
+        ],
+        { session },
+      );
+    }
 
     await session.commitTransaction();
     session.endSession();
+    sessionClosed = true;
 
     const payload = await populateOrderWithMovements(newOrder._id, tenantId);
     if (actorUserId) {
@@ -379,8 +434,34 @@ exports.createOrder = async (req, res) => {
     }
     res.status(201).json(payload.order);
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    if (!sessionClosed) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // Sin acción: puede estar cerrada o no iniciada.
+      }
+      session.endSession();
+      sessionClosed = true;
+    }
+
+    if (error?.code === 11000 && idempotencyKey) {
+      const existingKey = await IdempotencyKey.findOne({
+        tenant: tenantId,
+        scope: IDEMPOTENCY_SCOPES.CREATE,
+        key: idempotencyKey,
+      }).lean();
+
+      if (existingKey) {
+        const replayOrder = await getReplayPayload({
+          tenantId,
+          resourceId: existingKey.resourceId,
+        });
+        if (replayOrder) {
+          res.setHeader("Idempotent-Replayed", "true");
+          return res.status(200).json(replayOrder);
+        }
+      }
+    }
 
     return handleServerError(res, error, "Error al crear la orden");
   }
@@ -389,13 +470,43 @@ exports.createOrder = async (req, res) => {
 // Actualizar una orden
 exports.updateOrder = async (req, res) => {
   const session = await mongoose.startSession();
+  let sessionClosed = false;
+  const tenantId = req.user?.tenant;
+  const actorUserId = req.user?._id;
+  const targetOrderId = req.params.id;
+  const idempotencyKey = getIdempotencyKey(req);
 
   try {
+    if (idempotencyKey) {
+      const existingKey = await IdempotencyKey.findOne({
+        tenant: tenantId,
+        scope: IDEMPOTENCY_SCOPES.UPDATE,
+        key: idempotencyKey,
+      }).lean();
+
+      if (existingKey) {
+        if (String(existingKey.resourceId) !== String(targetOrderId)) {
+          return sendError(res, {
+            status: 409,
+            code: "IDEMPOTENCY_KEY_REUSED",
+            message: "La clave de idempotencia ya fue usada para otra orden",
+          });
+        }
+
+        const replayOrder = await getReplayPayload({
+          tenantId,
+          resourceId: existingKey.resourceId,
+        });
+        if (replayOrder) {
+          res.setHeader("Idempotent-Replayed", "true");
+          return res.status(200).json(replayOrder);
+        }
+      }
+    }
+
     session.startTransaction();
 
-    const tenantId = req.user?.tenant;
-    const actorUserId = req.user?._id;
-    const order = await Order.findOne({ _id: req.params.id, tenant: tenantId }).session(
+    const order = await Order.findOne({ _id: targetOrderId, tenant: tenantId }).session(
       session,
     );
     const orderSettings = await getOrderSettings(tenantId);
@@ -477,9 +588,24 @@ exports.updateOrder = async (req, res) => {
     }
 
     await order.save({ session });
+    if (idempotencyKey) {
+      await IdempotencyKey.create(
+        [
+          {
+            tenant: tenantId,
+            scope: IDEMPOTENCY_SCOPES.UPDATE,
+            key: idempotencyKey,
+            resourceType: "order",
+            resourceId: order._id,
+          },
+        ],
+        { session },
+      );
+    }
 
     await session.commitTransaction();
     session.endSession();
+    sessionClosed = true;
 
     const payload = await populateOrderWithMovements(order._id, tenantId);
     if (actorUserId) {
@@ -497,8 +623,42 @@ exports.updateOrder = async (req, res) => {
     }
     res.json(payload.order);
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    if (!sessionClosed) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // Sin acción: puede estar cerrada o no iniciada.
+      }
+      session.endSession();
+      sessionClosed = true;
+    }
+
+    if (error?.code === 11000 && idempotencyKey) {
+      const existingKey = await IdempotencyKey.findOne({
+        tenant: tenantId,
+        scope: IDEMPOTENCY_SCOPES.UPDATE,
+        key: idempotencyKey,
+      }).lean();
+
+      if (existingKey) {
+        if (String(existingKey.resourceId) !== String(targetOrderId)) {
+          return sendError(res, {
+            status: 409,
+            code: "IDEMPOTENCY_KEY_REUSED",
+            message: "La clave de idempotencia ya fue usada para otra orden",
+          });
+        }
+
+        const replayOrder = await getReplayPayload({
+          tenantId,
+          resourceId: existingKey.resourceId,
+        });
+        if (replayOrder) {
+          res.setHeader("Idempotent-Replayed", "true");
+          return res.status(200).json(replayOrder);
+        }
+      }
+    }
 
     return handleServerError(res, error, "Error al actualizar la orden");
   }

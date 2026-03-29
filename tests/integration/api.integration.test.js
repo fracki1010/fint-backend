@@ -182,6 +182,130 @@ describe("API integration", () => {
     expect(movementResponse.body.error.code).toBe("INSUFFICIENT_STOCK");
   });
 
+  it("evita crear orden duplicada cuando se reintenta con el mismo Idempotency-Key", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Idempotencia",
+        phone: "5491111111122",
+        taxId: "20-22222222-2",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Idempotencia Create",
+        price: 25,
+        stock: 20,
+      });
+    expect(productResponse.status).toBe(201);
+
+    const key = "idem-create-order-001";
+    const payload = {
+      client: clientResponse.body._id,
+      items: [
+        {
+          product: "Producto Idempotencia Create",
+          productId: productResponse.body._id,
+          quantity: 2,
+          price: 25,
+        },
+      ],
+      totalAmount: 50,
+      salesStatus: "Confirmada",
+      paymentStatus: "Pagado",
+      deliveryStatus: "Entregada",
+    };
+
+    const first = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(payload);
+
+    const second = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(payload);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(200);
+    expect(second.headers["idempotent-replayed"]).toBe("true");
+    expect(first.body._id).toBe(second.body._id);
+
+    const totalOrders = await Order.countDocuments({});
+    expect(totalOrders).toBe(1);
+  });
+
+  it("evita reaplicar update de orden cuando se reintenta con el mismo Idempotency-Key", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Idempotencia Update",
+        phone: "5491111111133",
+        taxId: "20-33333333-3",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Idempotencia Update",
+        price: 30,
+        stock: 15,
+      });
+    expect(productResponse.status).toBe(201);
+
+    const createOrderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Producto Idempotencia Update",
+            productId: productResponse.body._id,
+            quantity: 1,
+            price: 30,
+          },
+        ],
+        totalAmount: 30,
+      });
+    expect(createOrderResponse.status).toBe(201);
+
+    const orderId = createOrderResponse.body._id;
+    const key = "idem-update-order-001";
+    const updatePayload = { notes: "nota idempotente" };
+
+    const firstUpdate = await request(app)
+      .put(`/api/orders/${orderId}`)
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(updatePayload);
+
+    const secondUpdate = await request(app)
+      .put(`/api/orders/${orderId}`)
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(updatePayload);
+
+    expect(firstUpdate.status).toBe(200);
+    expect(secondUpdate.status).toBe(200);
+    expect(secondUpdate.headers["idempotent-replayed"]).toBe("true");
+    expect(firstUpdate.body._id).toBe(secondUpdate.body._id);
+    expect(secondUpdate.body.notes).toBe("nota idempotente");
+  });
+
   it("rechaza payload inválido con VALIDATION_ERROR", async () => {
     const token = await bootstrapAndGetToken();
 
