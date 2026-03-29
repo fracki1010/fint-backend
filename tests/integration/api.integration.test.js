@@ -11,6 +11,7 @@ process.env.CORS_ORIGINS = "http://localhost:5173";
 const { createApp } = require("../../src/app");
 const { Product } = require("../../src/models/product.model");
 const Order = require("../../src/models/order.model");
+const StockMovement = require("../../src/models/stockMovement.model");
 
 let mongoServer;
 let app;
@@ -304,6 +305,123 @@ describe("API integration", () => {
     expect(secondUpdate.headers["idempotent-replayed"]).toBe("true");
     expect(firstUpdate.body._id).toBe(secondUpdate.body._id);
     expect(secondUpdate.body.notes).toBe("nota idempotente");
+  });
+
+  it("evita recancelar orden y duplicar reversion de stock con el mismo Idempotency-Key", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Idempotencia Delete",
+        phone: "5491111111144",
+        taxId: "20-44444444-4",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Idempotencia Delete",
+        price: 40,
+        stock: 10,
+      });
+    expect(productResponse.status).toBe(201);
+    const productId = productResponse.body._id;
+
+    const orderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Producto Idempotencia Delete",
+            productId,
+            quantity: 2,
+            price: 40,
+          },
+        ],
+        totalAmount: 80,
+        salesStatus: "Confirmada",
+        paymentStatus: "Pagado",
+        deliveryStatus: "Entregada",
+      });
+    expect(orderResponse.status).toBe(201);
+    const orderId = orderResponse.body._id;
+
+    const key = "idem-delete-order-001";
+    const firstDelete = await request(app)
+      .delete(`/api/orders/${orderId}`)
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key);
+
+    const secondDelete = await request(app)
+      .delete(`/api/orders/${orderId}`)
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key);
+
+    expect(firstDelete.status).toBe(200);
+    expect(secondDelete.status).toBe(200);
+    expect(secondDelete.headers["idempotent-replayed"]).toBe("true");
+
+    const productAfter = await Product.findById(productId).lean();
+    expect(productAfter.stock).toBe(10);
+
+    const orderAfter = await Order.findById(orderId).lean();
+    expect(orderAfter.salesStatus).toBe("Cancelada");
+    expect(orderAfter.stockApplied).toBe(false);
+  });
+
+  it("evita duplicar movimiento manual de stock con el mismo Idempotency-Key", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Idempotencia Movimiento",
+        price: 60,
+        stock: 5,
+      });
+    expect(productResponse.status).toBe(201);
+    const productId = productResponse.body._id;
+
+    const key = "idem-stock-movement-001";
+    const movementPayload = {
+      product: productId,
+      type: "ENTRADA",
+      quantity: 3,
+      reason: "Ajuste idempotente",
+    };
+
+    const firstMovement = await request(app)
+      .post("/api/stock-movements")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(movementPayload);
+
+    const secondMovement = await request(app)
+      .post("/api/stock-movements")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(movementPayload);
+
+    expect(firstMovement.status).toBe(201);
+    expect(secondMovement.status).toBe(200);
+    expect(secondMovement.headers["idempotent-replayed"]).toBe("true");
+    expect(firstMovement.body._id).toBe(secondMovement.body._id);
+
+    const productAfter = await Product.findById(productId).lean();
+    expect(productAfter.stock).toBe(8);
+
+    const movementsCount = await StockMovement.countDocuments({
+      product: productId,
+      tenant: productAfter.tenant,
+    });
+    expect(movementsCount).toBe(1);
   });
 
   it("rechaza payload inválido con VALIDATION_ERROR", async () => {

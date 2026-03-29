@@ -192,6 +192,7 @@ const getOrderSettings = async (tenantId) => {
 const IDEMPOTENCY_SCOPES = {
   CREATE: "order:create",
   UPDATE: "order:update",
+  DELETE: "order:delete",
 };
 
 const getIdempotencyKey = (req) => {
@@ -668,12 +669,36 @@ exports.updateOrder = async (req, res) => {
 exports.deleteOrder = async (req, res) => {
   const session = await mongoose.startSession();
   let sessionClosed = false;
+  const tenantId = req.user?.tenant;
+  const actorUserId = req.user?._id;
+  const targetOrderId = req.params.id;
+  const idempotencyKey = getIdempotencyKey(req);
 
   try {
+    if (idempotencyKey) {
+      const existingKey = await IdempotencyKey.findOne({
+        tenant: tenantId,
+        scope: IDEMPOTENCY_SCOPES.DELETE,
+        key: idempotencyKey,
+      }).lean();
+
+      if (existingKey) {
+        if (String(existingKey.resourceId) !== String(targetOrderId)) {
+          return sendError(res, {
+            status: 409,
+            code: "IDEMPOTENCY_KEY_REUSED",
+            message: "La clave de idempotencia ya fue usada para otra orden",
+          });
+        }
+
+        res.setHeader("Idempotent-Replayed", "true");
+        return res.json({ message: "Orden cancelada correctamente" });
+      }
+    }
+
     session.startTransaction();
-    const tenantId = req.user?.tenant;
     const order = await Order.findOne({
-      _id: req.params.id,
+      _id: targetOrderId,
       tenant: tenantId,
     }).session(session);
 
@@ -703,6 +728,20 @@ exports.deleteOrder = async (req, res) => {
 
       await order.save({ session });
     }
+    if (idempotencyKey) {
+      await IdempotencyKey.create(
+        [
+          {
+            tenant: tenantId,
+            scope: IDEMPOTENCY_SCOPES.DELETE,
+            key: idempotencyKey,
+            resourceType: "order",
+            resourceId: order._id,
+          },
+        ],
+        { session },
+      );
+    }
 
     await session.commitTransaction();
     session.endSession();
@@ -710,7 +749,7 @@ exports.deleteOrder = async (req, res) => {
 
     try {
       await createAndDispatchNotification({
-        userId: req.user?._id,
+        userId: actorUserId,
         type: "warning",
         title: "Orden cancelada",
         message: `Se canceló la orden ${order.orderNumber || order._id}.`,
@@ -729,6 +768,27 @@ exports.deleteOrder = async (req, res) => {
       }
       session.endSession();
       sessionClosed = true;
+    }
+
+    if (error?.code === 11000 && idempotencyKey) {
+      const existingKey = await IdempotencyKey.findOne({
+        tenant: tenantId,
+        scope: IDEMPOTENCY_SCOPES.DELETE,
+        key: idempotencyKey,
+      }).lean();
+
+      if (existingKey) {
+        if (String(existingKey.resourceId) !== String(targetOrderId)) {
+          return sendError(res, {
+            status: 409,
+            code: "IDEMPOTENCY_KEY_REUSED",
+            message: "La clave de idempotencia ya fue usada para otra orden",
+          });
+        }
+
+        res.setHeader("Idempotent-Replayed", "true");
+        return res.json({ message: "Orden cancelada correctamente" });
+      }
     }
 
     return handleServerError(res, error, "Error al cancelar la orden");
