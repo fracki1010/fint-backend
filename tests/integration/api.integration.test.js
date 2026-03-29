@@ -15,6 +15,7 @@ const StockMovement = require("../../src/models/stockMovement.model");
 
 let mongoServer;
 let app;
+let bootstrapCounter = 0;
 
 const bootstrapPayload = {
   setupKey: process.env.ADMIN_SETUP_KEY,
@@ -25,8 +26,12 @@ const bootstrapPayload = {
 };
 
 async function bootstrapAndGetToken() {
+  bootstrapCounter += 1;
+  const testIp = `127.0.0.${Math.min(bootstrapCounter, 250)}`;
+
   const bootstrapResponse = await request(app)
     .post("/api/auth/bootstrap-superadmin")
+    .set("X-Forwarded-For", testIp)
     .send(bootstrapPayload);
 
   expect(bootstrapResponse.status).toBe(201);
@@ -460,5 +465,157 @@ describe("API integration", () => {
 
     expect(lastResponse.status).toBe(429);
     expect(lastResponse.body.error.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+
+  it("protege endpoint de WhatsApp cuando no hay autenticacion", async () => {
+    const response = await request(app).get("/api/whatsapp/status");
+    expect(response.status).toBe(401);
+  });
+
+  it("solo superadmin puede crear usuarios", async () => {
+    const superToken = await bootstrapAndGetToken();
+
+    const createUserResponse = await request(app)
+      .post("/api/auth/users")
+      .set("Authorization", `Bearer ${superToken}`)
+      .send({
+        fullName: "Operador QA",
+        email: "operador-qa@test.local",
+        password: "secret123",
+        storeName: "Sucursal QA",
+      });
+    expect(createUserResponse.status).toBe(201);
+
+    const operatorLogin = await request(app).post("/api/auth/login").send({
+      email: "operador-qa@test.local",
+      password: "secret123",
+    });
+    expect(operatorLogin.status).toBe(200);
+
+    const forbiddenCreate = await request(app)
+      .post("/api/auth/users")
+      .set("Authorization", `Bearer ${operatorLogin.body.token}`)
+      .send({
+        fullName: "No Permitido",
+        email: "no-permitido@test.local",
+        password: "secret123",
+        storeName: "No Permitido",
+      });
+
+    expect(forbiddenCreate.status).toBe(403);
+    expect(forbiddenCreate.body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("bloquea entrega sin pago cuando la politica no lo permite", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Politica Pago",
+        phone: "5491111111155",
+        taxId: "20-55555555-5",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Politica Pago",
+        price: 70,
+        stock: 12,
+      });
+    expect(productResponse.status).toBe(201);
+
+    const orderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Producto Politica Pago",
+            productId: productResponse.body._id,
+            quantity: 1,
+            price: 70,
+          },
+        ],
+        totalAmount: 70,
+      });
+    expect(orderResponse.status).toBe(201);
+
+    const updateResponse = await request(app)
+      .put(`/api/orders/${orderResponse.body._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        deliveryStatus: "Entregada",
+        paymentStatus: "Pendiente",
+      });
+
+    expect(updateResponse.status).toBe(400);
+    expect(updateResponse.body.error.code).toBe(
+      "DELIVERY_WITHOUT_PAYMENT_NOT_ALLOWED",
+    );
+  });
+
+  it("permite entrega sin pago cuando la configuracion lo habilita", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const settingsUpdate = await request(app)
+      .put("/api/settings")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ allowDeliveryWithoutPayment: true });
+    expect(settingsUpdate.status).toBe(200);
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Politica Flexible",
+        phone: "5491111111166",
+        taxId: "20-66666666-6",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Politica Flexible",
+        price: 80,
+        stock: 10,
+      });
+    expect(productResponse.status).toBe(201);
+
+    const orderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Producto Politica Flexible",
+            productId: productResponse.body._id,
+            quantity: 1,
+            price: 80,
+          },
+        ],
+        totalAmount: 80,
+      });
+    expect(orderResponse.status).toBe(201);
+
+    const updateResponse = await request(app)
+      .put(`/api/orders/${orderResponse.body._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        deliveryStatus: "Entregada",
+        paymentStatus: "Pendiente",
+      });
+
+    expect(updateResponse.status).toBe(200);
+    expect(updateResponse.body.deliveryStatus).toBe("Entregada");
+    expect(updateResponse.body.paymentStatus).toBe("Pendiente");
   });
 });
