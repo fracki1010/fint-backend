@@ -1,0 +1,29 @@
+const mongoose = require("mongoose");
+
+const clientSchema = new mongoose.Schema(
+  {
+    tenant: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Tenant",
+      index: true,
+      required: true,
+    },
+    phone: { type: String, required: true },
+    name: { type: String },
+    taxId: { type: String, default: "" }, // Documento fiscal del cliente
+    email: { type: String },
+    address: { type: String },
+    fiscalAddress: { type: String, default: "" },
+    company: { type: String },
+    notes: { type: String },
+    debt: { type: Number, default: 0 },
+    pendingAction: { type: Object, default: null }, // 👈 Nuevo campo para la memoria de confirmación
+    isActive: { type: Boolean, default: true },
+    deletedAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
+clientSchema.index({ tenant: 1, phone: 1 }, { unique: true });
+
+module.exports = mongoose.model("Client", clientSchema);
