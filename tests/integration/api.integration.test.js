@@ -56,6 +56,22 @@ afterAll(async () => {
 });
 
 describe("API integration", () => {
+  it("deshabilita bootstrap-superadmin en produccion", async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = "production";
+
+      const response = await request(app)
+        .post("/api/auth/bootstrap-superadmin")
+        .send(bootstrapPayload);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe("NOT_FOUND");
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
   it("autentica usuario y devuelve error estándar en credenciales inválidas", async () => {
     await bootstrapAndGetToken();
 
@@ -180,5 +196,20 @@ describe("API integration", () => {
     expect(invalidProductResponse.status).toBe(400);
     expect(invalidProductResponse.body.error.code).toBe("VALIDATION_ERROR");
     expect(Array.isArray(invalidProductResponse.body.error.details)).toBe(true);
+  });
+
+  it("aplica rate limit en login", async () => {
+    await bootstrapAndGetToken();
+
+    let lastResponse = null;
+    for (let attempt = 0; attempt < 11; attempt += 1) {
+      lastResponse = await request(app).post("/api/auth/login").send({
+        email: "rate-limit-test@test.local",
+        password: "wrong-password",
+      });
+    }
+
+    expect(lastResponse.status).toBe(429);
+    expect(lastResponse.body.error.code).toBe("RATE_LIMIT_EXCEEDED");
   });
 });

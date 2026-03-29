@@ -26,6 +26,7 @@ const parseCorsOrigins = () => {
 };
 
 const isBootstrapEnabled = () => {
+  if (isProduction()) return false;
   const flag = (process.env.AUTH_BOOTSTRAP_ENABLED || "").toLowerCase();
   return flag === "true";
 };
@@ -33,9 +34,12 @@ const isBootstrapEnabled = () => {
 const validateRuntimeConfig = () => {
   getRequiredEnv("MONGO_URI");
   getRequiredEnv("JWT_SECRET");
+  getRequiredEnv("ADMIN_SETUP_KEY");
 
-  if (isBootstrapEnabled()) {
-    getRequiredEnv("ADMIN_SETUP_KEY");
+  if (isProduction() && parseCorsOrigins().length === 0) {
+    throw new Error(
+      "Missing required environment variable: CORS_ORIGINS",
+    );
   }
 };
 

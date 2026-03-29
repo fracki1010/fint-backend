@@ -122,12 +122,16 @@ const handleIncomingMessage = async (phone, messageBody) => {
       case "CREAR_PRODUCTO": {
         const { name, price, stock } = classification.product || {};
         const productName = (name || "").toString().trim().toLowerCase();
-        const stockDelta = Number(stock) || 0;
+        const rawStock = Number(stock);
+        const stockDelta = Number.isFinite(rawStock) ? rawStock : 0;
         const safePrice = Number(price) || 0;
         const session = await mongoose.startSession();
 
         if (!productName) {
           return "❌ Debes indicar un nombre de producto válido.";
+        }
+        if (stockDelta < 0) {
+          return "❌ El stock inicial no puede ser negativo.";
         }
 
         try {
@@ -293,29 +297,48 @@ const handleIncomingMessage = async (phone, messageBody) => {
           return "❌ La cantidad debe ser mayor a cero.";
         }
 
-        const productoDB = await Product.findOne({
-          tenant: tenantId,
-          name: new RegExp(name, "i"),
-        });
+        const session = await mongoose.startSession();
+        try {
+          session.startTransaction();
 
-        if (productoDB) {
-          let stockAnterior = productoDB.stock;
-          productoDB.stock += qty;
-          await productoDB.save();
-
-          await StockMovement.create({
+          const productoDB = await Product.findOne({
             tenant: tenantId,
-            product: productoDB._id,
-            type: "ENTRADA",
-            quantity: qty,
-            stockBefore: stockAnterior,
-            stockAfter: productoDB.stock,
-            reason: reason || "Entrada manual de stock",
-          });
+            name: new RegExp(name, "i"),
+          }).session(session);
 
+          if (!productoDB) {
+            await session.abortTransaction();
+            session.endSession();
+            return `❌ Producto no encontrado: ${name}. Si quieres crearlo, dímelo.`;
+          }
+
+          const stockAnterior = productoDB.stock;
+          productoDB.stock += qty;
+          await productoDB.save({ session });
+
+          await StockMovement.create(
+            [
+              {
+                tenant: tenantId,
+                product: productoDB._id,
+                type: "ENTRADA",
+                quantity: qty,
+                stockBefore: stockAnterior,
+                stockAfter: productoDB.stock,
+                reason: reason || "Entrada manual de stock",
+                source: "WhatsApp",
+              },
+            ],
+            { session },
+          );
+
+          await session.commitTransaction();
+          session.endSession();
           return `✅ Stock actualizado: *${productoDB.name}* tiene ahora ${productoDB.stock} unidades.`;
-        } else {
-          return `❌ Producto no encontrado: ${name}. Si quieres crearlo, dímelo.`;
+        } catch (error) {
+          await session.abortTransaction();
+          session.endSession();
+          throw error;
         }
       }
 
@@ -326,33 +349,54 @@ const handleIncomingMessage = async (phone, messageBody) => {
           return "❌ La cantidad debe ser mayor a cero.";
         }
 
-        const productoDB = await Product.findOne({
-          tenant: tenantId,
-          name: new RegExp(name, "i"),
-        });
+        const session = await mongoose.startSession();
+        try {
+          session.startTransaction();
 
-        if (productoDB) {
-          let stockAnterior = productoDB.stock;
+          const productoDB = await Product.findOne({
+            tenant: tenantId,
+            name: new RegExp(name, "i"),
+          }).session(session);
+
+          if (!productoDB) {
+            await session.abortTransaction();
+            session.endSession();
+            return `❌ Producto no encontrado: ${name}.`;
+          }
+
+          const stockAnterior = productoDB.stock;
           if (stockAnterior < qty) {
+            await session.abortTransaction();
+            session.endSession();
             return `❌ Stock insuficiente para ${productoDB.name}. Disponible: ${stockAnterior}.`;
           }
 
           productoDB.stock -= qty;
-          await productoDB.save();
+          await productoDB.save({ session });
 
-          await StockMovement.create({
-            tenant: tenantId,
-            product: productoDB._id,
-            type: "MERMA",
-            quantity: qty,
-            stockBefore: stockAnterior,
-            stockAfter: productoDB.stock,
-            reason: reason || "Reporte de merma/pérdida",
-          });
+          await StockMovement.create(
+            [
+              {
+                tenant: tenantId,
+                product: productoDB._id,
+                type: "MERMA",
+                quantity: qty,
+                stockBefore: stockAnterior,
+                stockAfter: productoDB.stock,
+                reason: reason || "Reporte de merma/perdida",
+                source: "WhatsApp",
+              },
+            ],
+            { session },
+          );
 
-          return `✅ Baja registrada: *${productoDB.name}* bajó a ${productoDB.stock} unidades.`;
-        } else {
-          return `❌ Producto no encontrado: ${name}.`;
+          await session.commitTransaction();
+          session.endSession();
+          return `✅ Baja registrada: *${productoDB.name}* bajo a ${productoDB.stock} unidades.`;
+        } catch (error) {
+          await session.abortTransaction();
+          session.endSession();
+          throw error;
         }
       }
 

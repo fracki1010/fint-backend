@@ -6,9 +6,8 @@ const { validateRuntimeConfig } = require("./src/config/runtime");
 // const { initializeWhatsApp } = require("./src/services/whatsappService"); // Comentado para evitar levantar WhatsApp al iniciar el servidor
 
 const PORT = process.env.PORT || 5000;
-const app = createApp();
-
 validateRuntimeConfig();
+const app = createApp();
 
 // 👈 2. EJECUTAMOS LA CONEXIÓN A LA BASE DE DATOS AQUÍ
 connectDB();

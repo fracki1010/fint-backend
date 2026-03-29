@@ -7,6 +7,7 @@ const Setting = require("../models/setting.model");
 const {
   getRequiredEnv,
   isBootstrapEnabled,
+  isProduction,
 } = require("../config/runtime");
 const { sendError, handleServerError } = require("../utils/http");
 
@@ -126,6 +127,14 @@ exports.me = async (req, res) => {
 
 exports.bootstrapSuperAdmin = async (req, res) => {
   try {
+    if (isProduction()) {
+      return sendError(res, {
+        status: 404,
+        code: "NOT_FOUND",
+        message: "Ruta no disponible",
+      });
+    }
+
     if (!isBootstrapEnabled()) {
       return sendError(res, {
         status: 404,
