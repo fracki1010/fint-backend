@@ -45,6 +45,7 @@ function createApp(options = {}) {
     require("./routes/stockMovementRoutes"),
   );
   app.use("/api/dashboard", authMiddleware, require("./routes/dashboardRoutes"));
+  app.use("/api/financial", authMiddleware, require("./routes/financialRoutes"));
   app.use("/api/whatsapp", authMiddleware, require("./routes/whatsappRoutes"));
   app.use("/api/notifications", require("./routes/notificationRoutes"));
   app.use("/api/audit-logs", authMiddleware, require("./routes/auditLogRoutes"));

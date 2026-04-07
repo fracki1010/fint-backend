@@ -76,6 +76,51 @@ const buildStatePatch = (payload, currentOrder) => {
   return patch;
 };
 
+const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session) => {
+  const normalizedItems = [];
+
+  for (const rawItem of items || []) {
+    const normalized = {
+      product: rawItem.product,
+      quantity: Number(rawItem.quantity) || 0,
+      price: Number(rawItem.price) || 0,
+      unitCostAtSale: 0,
+    };
+
+    let matchedProduct = null;
+
+    if (rawItem.productId) {
+      matchedProduct = await Product.findOne({
+        _id: rawItem.productId,
+        tenant: tenantId,
+      })
+        .select("_id name costPrice")
+        .session(session);
+    }
+
+    if (!matchedProduct && rawItem.product) {
+      matchedProduct = await Product.findOne({
+        name: rawItem.product,
+        tenant: tenantId,
+      })
+        .select("_id name costPrice")
+        .session(session);
+    }
+
+    if (matchedProduct) {
+      normalized.productId = matchedProduct._id;
+      normalized.product = matchedProduct.name;
+      normalized.unitCostAtSale = Number(matchedProduct.costPrice) || 0;
+    } else if (rawItem.productId) {
+      normalized.productId = rawItem.productId;
+    }
+
+    normalizedItems.push(normalized);
+  }
+
+  return normalizedItems;
+};
+
 const applyStockForOrder = async (order, session, reasonPrefix, source, tenantId) => {
   for (const item of order.items) {
     let product = null;
@@ -346,11 +391,16 @@ exports.createOrder = async (req, res) => {
       paymentStatus || (status === "Pagado" ? "Pagado" : "Pendiente");
     const nextDeliveryStatus =
       deliveryStatus || (status === "Entregado" ? "Entregada" : "Pendiente");
+    const normalizedItems = await resolveOrderItemsWithCostSnapshot(
+      items,
+      tenantId,
+      session,
+    );
 
     const newOrder = new Order({
       tenant: tenantId,
       client,
-      items,
+      items: normalizedItems,
       totalAmount,
       orderNumber: await reserveOrderNumber(orderSettings, session),
       imageUrl,

@@ -124,6 +124,7 @@ describe("API integration", () => {
       .send({
         name: "Producto Test",
         price: 100,
+        costPrice: 35,
         stock: 10,
       });
     expect(productResponse.status).toBe(201);
@@ -150,6 +151,7 @@ describe("API integration", () => {
 
     expect(orderResponse.status).toBe(201);
     const orderId = orderResponse.body._id;
+    expect(orderResponse.body.items?.[0]?.unitCostAtSale).toBe(35);
 
     const productAfterSale = await Product.findById(productId).lean();
     expect(productAfterSale.stock).toBe(8);

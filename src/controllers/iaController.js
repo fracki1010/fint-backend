@@ -221,6 +221,7 @@ const handleIncomingMessage = async (phone, messageBody) => {
               quantity,
               price: productoDB.price,
               productId: productoDB._id,
+              unitCostAtSale: Number(productoDB.costPrice) || 0,
             });
 
             const stockAnterior = productoDB.stock;
