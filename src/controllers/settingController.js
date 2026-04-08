@@ -12,13 +12,33 @@ const sanitizeText = (value, fallback = "") => {
   return value.toString().trim();
 };
 
-const normalizeWhatsAppNumber = (value = "") =>
+const normalizePhoneDigits = (value = "") =>
   value
     .toString()
     .trim()
     .replace(/[^\d]/g, "");
 
-const normalizeWhatsAppNumbers = (value, fallback = []) => {
+const normalizeWhatsAppNumber = (value = "", format = "AR") => {
+  const digits = normalizePhoneDigits(value);
+  if (!digits) return "";
+
+  if (format !== "AR") return digits;
+
+  // Argentina (movil WhatsApp): 54 + 9 + area + numero.
+  if (digits.startsWith("549")) return digits;
+
+  if (digits.startsWith("54")) {
+    const national = digits.slice(2).replace(/^0+/, "");
+    if (!national) return "549";
+    if (national.startsWith("9")) return `54${national}`;
+    return `549${national}`;
+  }
+
+  const withoutTrunk = digits.startsWith("0") ? digits.slice(1) : digits;
+  return `549${withoutTrunk}`;
+};
+
+const normalizeWhatsAppNumbers = (value, fallback = [], format = "AR") => {
   if (value === undefined) return fallback;
 
   const source = Array.isArray(value)
@@ -29,7 +49,7 @@ const normalizeWhatsAppNumbers = (value, fallback = []) => {
         .map((item) => item.trim());
 
   const normalized = source
-    .map((item) => normalizeWhatsAppNumber(item))
+    .map((item) => normalizeWhatsAppNumber(item, format))
     .filter(Boolean);
 
   return [...new Set(normalized)];
@@ -94,6 +114,11 @@ exports.getSettings = async (req, res) => {
       await settings.save();
     }
 
+    if (!settings.whatsappNumberFormat) {
+      settings.whatsappNumberFormat = "AR";
+      await settings.save();
+    }
+
     res.json(settings);
   } catch (error) {
     return handleServerError(res, error, "Error al obtener configuración");
@@ -106,6 +131,12 @@ exports.updateSettings = async (req, res) => {
     const updateData = req.body;
     const tenantId = req.user?.tenant;
     let settings = await Setting.findOne({ tenant: tenantId });
+    const resolvedWhatsAppNumberFormat =
+      updateData.whatsappNumberFormat !== undefined
+        ? updateData.whatsappNumberFormat === "INTL"
+          ? "INTL"
+          : "AR"
+        : settings?.whatsappNumberFormat || "AR";
     const institutionalData = {
       storeName: sanitizeText(updateData.storeName, settings?.storeName || ""),
       taxId: sanitizeText(updateData.taxId, settings?.taxId || ""),
@@ -124,6 +155,7 @@ exports.updateSettings = async (req, res) => {
 
     const sanitizedData = {
       ...updateData,
+      whatsappNumberFormat: resolvedWhatsAppNumberFormat,
       storeName: institutionalData.storeName,
       taxId: institutionalData.taxId,
       fiscalCondition: institutionalData.fiscalCondition,
@@ -133,11 +165,15 @@ exports.updateSettings = async (req, res) => {
       invoiceTerms: institutionalData.invoiceTerms,
       whatsappAdminNumber:
         updateData.whatsappAdminNumber !== undefined
-          ? normalizeWhatsAppNumber(updateData.whatsappAdminNumber)
+          ? normalizeWhatsAppNumber(
+              updateData.whatsappAdminNumber,
+              resolvedWhatsAppNumberFormat,
+            )
           : settings?.whatsappAdminNumber || "",
       whatsappAuthorizedNumbers: normalizeWhatsAppNumbers(
         updateData.whatsappAuthorizedNumbers,
         settings?.whatsappAuthorizedNumbers || [],
+        resolvedWhatsAppNumberFormat,
       ),
       admin:
         updateData.admin !== undefined

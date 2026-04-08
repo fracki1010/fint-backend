@@ -161,6 +161,7 @@ const settingUpdateBody = z.object({
   currency: z.string().trim().optional(),
   theme: z.enum(["light", "dark"]).optional(),
   whatsappEnabled: z.boolean().optional(),
+  whatsappNumberFormat: z.enum(["AR", "INTL"]).optional(),
   whatsappAdminNumber: z.string().trim().optional(),
   whatsappAuthorizedNumbers: z
     .union([z.array(z.string().trim()), z.string().trim()])

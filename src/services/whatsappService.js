@@ -5,6 +5,7 @@ const path = require("path");
 const { transcribeAudio } = require("./groqService");
 const { handleIncomingMessage } = require("../controllers/iaController"); // Importamos el controlador
 const Setting = require("../models/setting.model");
+const { getNumberContact } = require("../utils/getNumberContact");
 
 // Asegurarnos de que exista una carpeta temporal para los audios
 const tempDir = path.join(__dirname, "../../temp");
@@ -107,8 +108,10 @@ const bindWhatsAppEvents = (instance) => {
   instance.on("message", async (message) => {
     if (message.from === "status@broadcast") return;
 
+    const numberPhoneContact = await getNumberContact(message);
+
     try {
-      const senderAccess = await resolveTenantBySender(message.from);
+      const senderAccess = await resolveTenantBySender(numberPhoneContact);
 
       if (senderAccess.access === "ambiguous") {
         console.error(

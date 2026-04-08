@@ -32,6 +32,11 @@ const settingSchema = new mongoose.Schema(
     currency: { type: String, default: "USD" },
     theme: { type: String, default: "light", enum: ["light", "dark"] },
     whatsappEnabled: { type: Boolean, default: true },
+    whatsappNumberFormat: {
+      type: String,
+      enum: ["AR", "INTL"],
+      default: "AR",
+    },
     whatsappAdminNumber: { type: String, default: "" },
     whatsappAuthorizedNumbers: { type: [String], default: [] },
     lowStockThreshold: { type: Number, default: 5 },
