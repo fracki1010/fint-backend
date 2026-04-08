@@ -36,6 +36,105 @@ const getWhatsAppOwnerId = async () => {
   return cachedWhatsAppOwner;
 };
 
+const normalizeText = (value = "") =>
+  value
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+
+const escapeRegex = (value = "") =>
+  value.toString().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const levenshteinDistance = (a = "", b = "") => {
+  const first = normalizeText(a);
+  const second = normalizeText(b);
+  const matrix = Array.from({ length: first.length + 1 }, (_, i) =>
+    Array.from({ length: second.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
+  );
+
+  for (let i = 1; i <= first.length; i += 1) {
+    for (let j = 1; j <= second.length; j += 1) {
+      const cost = first[i - 1] === second[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost,
+      );
+    }
+  }
+
+  return matrix[first.length][second.length];
+};
+
+const withSession = (query, session) => (session ? query.session(session) : query);
+
+const findProductByName = async (tenantId, rawName, session = null) => {
+  const requestedName = (rawName || "").toString().trim();
+  if (!requestedName) {
+    return { product: null, suggestions: [] };
+  }
+
+  const exactRegex = new RegExp(`^${escapeRegex(requestedName)}$`, "i");
+  let product = await withSession(
+    Product.findOne({ tenant: tenantId, name: exactRegex }),
+    session,
+  );
+
+  if (!product) {
+    const containsRegex = new RegExp(escapeRegex(requestedName), "i");
+    product = await withSession(
+      Product.findOne({ tenant: tenantId, name: containsRegex }),
+      session,
+    );
+  }
+
+  if (product) {
+    return { product, suggestions: [] };
+  }
+
+  const candidates = await Product.find({ tenant: tenantId })
+    .select("name stock price unitOfMeasure minStock")
+    .limit(150)
+    .lean();
+
+  const requestedNormalized = normalizeText(requestedName);
+  const suggestions = candidates
+    .map((candidate) => ({
+      name: candidate.name,
+      score: levenshteinDistance(requestedNormalized, candidate.name),
+      contains: normalizeText(candidate.name).includes(requestedNormalized),
+    }))
+    .sort((a, b) => {
+      if (a.contains !== b.contains) return a.contains ? -1 : 1;
+      return a.score - b.score;
+    })
+    .slice(0, 3)
+    .map((item) => item.name);
+
+  return { product: null, suggestions };
+};
+
+const formatMoney = (value) => `$${Number(value || 0).toFixed(2)}`;
+
+const safeJsonParse = (raw) => {
+  try {
+    return JSON.parse((raw || "").replace(/```json|```/g, "").trim());
+  } catch (_error) {
+    return null;
+  }
+};
+
+const toObjectId = (value) => {
+  if (!value) return null;
+  if (value instanceof mongoose.Types.ObjectId) return value;
+  if (mongoose.Types.ObjectId.isValid(value)) {
+    return new mongoose.Types.ObjectId(value);
+  }
+  return null;
+};
+
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
     const owner = options.tenantId ? null : await getWhatsAppOwnerId();
@@ -54,7 +153,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             Responde ÚNICAMENTE con JSON: { "action": "CONFIRMAR" } o { "action": "CANCELAR" } o { "action": "INDECISO" }`;
 
       const confStr = await processText(confirmPrompt);
-      const confData = JSON.parse(confStr.replace(/```json|```/g, "").trim());
+      const confData = safeJsonParse(confStr) || { action: "INDECISO" };
 
       if (confData.action === "CANCELAR") {
         client.pendingAction = null;
@@ -72,9 +171,10 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     } else {
       // --- SI NO HAY ACCIÓN PENDIENTE, CLASIFICAMOS EL MENSAJE ---
 
-      // REGLA 3: Prompt modificado para ser CORTOS Y CONCISOS
+      // REGLA 3: Router operativo para asistente-gestor.
       const routerPrompt = `
-            Eres el asistente de Fint Guard. Sé EXTREMADAMENTE corto y conciso. Cero rodeos.
+            Eres el asistente virtual operativo de una empresa en Fint Guard.
+            Debes ser claro, breve y práctico. Siempre con enfoque en control de stock, ventas y clientes.
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
             1. Crear producto: { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0 } }
             2. Nuevo pedido: { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
@@ -82,13 +182,20 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             4. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
             5. Consultar stock: { "intent": "CONSULTAR_STOCK", "product": { "name": "..." } }
             6. Reporte bajo stock: { "intent": "REPORTE_BAJO_STOCK" }
-            7. Charla general: { "intent": "CHARLA_GENERAL", "message": "tu respuesta corta y directa" }
+            7. Listar productos: { "intent": "LISTAR_PRODUCTOS", "filters": { "lowStockOnly": false, "limit": 10 } }
+            8. Listar clientes: { "intent": "LISTAR_CLIENTES", "filters": { "top": 10 } }
+            9. Resumen ventas: { "intent": "RESUMEN_VENTAS", "period": "hoy|semana|mes" }
+            10. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
+            11. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
+            12. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
             `;
 
       const jsonString = await processText(messageBody, routerPrompt);
-      var classification = JSON.parse(
-        jsonString.replace(/```json|```/g, "").trim(),
-      );
+      var classification = safeJsonParse(jsonString) || {
+        intent: "CHARLA_GENERAL",
+        message:
+          "No pude clasificar con certeza. Pídeme algo puntual de stock, ventas o clientes.",
+      };
 
       // --- FASE DE CONFIRMACIÓN ---
       // Si detectamos que quiere crear algo, lo guardamos en 'pendingAction' y detenemos la ejecución
@@ -102,16 +209,22 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         await client.save();
 
         if (classification.intent === "CREAR_PRODUCTO") {
-          return `⚠️ Confirma:\n¿Guardo el producto *${classification.product.name}* a $${classification.product.price} con ${classification.product.stock || 0} de stock?\n(Sí/No)`;
+          const product = classification.product || {};
+          return `⚠️ Confirma:\n¿Guardo el producto *${product.name || "sin nombre"}* a $${product.price || 0} con ${product.stock || 0} de stock?\n(Sí/No)`;
         } else if (classification.intent === "NUEVO_PEDIDO") {
-          const detalles = classification.order.items
+          const detailsItems = Array.isArray(classification.order?.items)
+            ? classification.order.items
+            : [];
+          const detalles = detailsItems
             .map((i) => `${i.quantity}x ${i.product}`)
             .join(", ");
           return `⚠️ Confirma:\n¿Registro la venta de: ${detalles}?\n(Sí/No)`;
         } else if (classification.intent === "ENTRADA_STOCK") {
-          return `⚠️ Confirma:\n¿Agrego ${classification.product.quantity} unidades de stock al producto *${classification.product.name}* (Motivo: ${classification.product.reason || "Ingreso"})?\n(Sí/No)`;
+          const product = classification.product || {};
+          return `⚠️ Confirma:\n¿Agrego ${product.quantity || 0} unidades de stock al producto *${product.name || "sin nombre"}* (Motivo: ${product.reason || "Ingreso"})?\n(Sí/No)`;
         } else if (classification.intent === "MERMA_STOCK") {
-          return `⚠️ Confirma:\n¿Registro la baja de ${classification.product.quantity} unidades de *${classification.product.name}* por merma/pérdida (Motivo: ${classification.product.reason || "Pérdida"})?\n(Sí/No)`;
+          const product = classification.product || {};
+          return `⚠️ Confirma:\n¿Registro la baja de ${product.quantity || 0} unidades de *${product.name || "sin nombre"}* por merma/pérdida (Motivo: ${product.reason || "Pérdida"})?\n(Sí/No)`;
         }
       }
     }
@@ -198,13 +311,20 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             const quantity = toPositiveNumber(item?.quantity);
             if (!quantity) continue;
 
-            const productoDB = await Product.findOne({
-              tenant: tenantId,
-              name: new RegExp(item.product, "i"),
-            }).session(session);
+            const { product: productoDB, suggestions } = await findProductByName(
+              tenantId,
+              item.product,
+              session,
+            );
 
             if (!productoDB) {
-              noEncontrados.push(item.product);
+              if (suggestions.length > 0) {
+                noEncontrados.push(
+                  `${item.product} (quizás quisiste: ${suggestions.join(", ")})`,
+                );
+              } else {
+                noEncontrados.push(item.product);
+              }
               continue;
             }
 
@@ -291,7 +411,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
 
       case "ENTRADA_STOCK": {
-        const { name, quantity, reason } = classification.product;
+        const { name, quantity, reason } = classification.product || {};
         const qty = toPositiveNumber(quantity);
         if (!qty) {
           return "❌ La cantidad debe ser mayor a cero.";
@@ -301,14 +421,18 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         try {
           session.startTransaction();
 
-          const productoDB = await Product.findOne({
-            tenant: tenantId,
-            name: new RegExp(name, "i"),
-          }).session(session);
+          const { product: productoDB, suggestions } = await findProductByName(
+            tenantId,
+            name,
+            session,
+          );
 
           if (!productoDB) {
             await session.abortTransaction();
             session.endSession();
+            if (suggestions.length > 0) {
+              return `❌ Producto no encontrado: ${name}. ¿Quisiste decir: ${suggestions.join(", ")}?`;
+            }
             return `❌ Producto no encontrado: ${name}. Si quieres crearlo, dímelo.`;
           }
 
@@ -343,7 +467,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
 
       case "MERMA_STOCK": {
-        const { name, quantity, reason } = classification.product;
+        const { name, quantity, reason } = classification.product || {};
         const qty = toPositiveNumber(quantity);
         if (!qty) {
           return "❌ La cantidad debe ser mayor a cero.";
@@ -353,14 +477,18 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         try {
           session.startTransaction();
 
-          const productoDB = await Product.findOne({
-            tenant: tenantId,
-            name: new RegExp(name, "i"),
-          }).session(session);
+          const { product: productoDB, suggestions } = await findProductByName(
+            tenantId,
+            name,
+            session,
+          );
 
           if (!productoDB) {
             await session.abortTransaction();
             session.endSession();
+            if (suggestions.length > 0) {
+              return `❌ Producto no encontrado: ${name}. ¿Quisiste decir: ${suggestions.join(", ")}?`;
+            }
             return `❌ Producto no encontrado: ${name}.`;
           }
 
@@ -401,17 +529,20 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
 
       case "CONSULTAR_STOCK": {
-        const { name } = classification.product;
+        const { name } = classification.product || {};
         if (!name) return "Por favor, especifica el nombre del producto.";
 
-        const productoDB = await Product.findOne({
-          tenant: tenantId,
-          name: new RegExp(name, "i"),
-        });
+        const { product: productoDB, suggestions } = await findProductByName(
+          tenantId,
+          name,
+        );
 
         if (productoDB) {
           return `📦 *${productoDB.name}*\nStock actual: ${productoDB.stock} ${productoDB.unitOfMeasure || "unidades"}\nStock mínimo: ${productoDB.minStock}`;
         } else {
+          if (suggestions.length > 0) {
+            return `❌ No encontré "${name}". ¿Quisiste decir: ${suggestions.join(", ")}?`;
+          }
           return `❌ No encontré ningún producto llamado "${name}".`;
         }
       }
@@ -434,9 +565,207 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         return msj;
       }
 
+      case "LISTAR_PRODUCTOS": {
+        const onlyLowStock = Boolean(classification?.filters?.lowStockOnly);
+        const limit = Math.min(
+          Math.max(Number(classification?.filters?.limit) || 10, 1),
+          30,
+        );
+        const filter = {
+          tenant: tenantId,
+          isActive: { $ne: false },
+        };
+
+        const products = onlyLowStock
+          ? await Product.find({
+              ...filter,
+              $expr: { $lte: ["$stock", "$minStock"] },
+            })
+              .sort({ stock: 1, name: 1 })
+              .limit(limit)
+          : await Product.find(filter).sort({ updatedAt: -1 }).limit(limit);
+
+        if (products.length === 0) {
+          return onlyLowStock
+            ? "No hay productos en estado de bajo stock."
+            : "No hay productos cargados.";
+        }
+
+        let message = onlyLowStock ? "⚠️ Bajo stock:\n" : "📦 Productos:\n";
+        for (const product of products) {
+          message += `- ${product.name}: ${product.stock} ${product.unitOfMeasure || "un"} · ${formatMoney(product.price)}\n`;
+        }
+        return message.trim();
+      }
+
+      case "LISTAR_CLIENTES": {
+        const top = Math.min(Math.max(Number(classification?.filters?.top) || 10, 1), 30);
+        const clients = await Client.find({
+          tenant: tenantId,
+          isActive: { $ne: false },
+        })
+          .sort({ updatedAt: -1 })
+          .limit(top)
+          .lean();
+
+        if (clients.length === 0) return "No hay clientes registrados.";
+
+        let message = "👥 Clientes recientes:\n";
+        for (const clientItem of clients) {
+          const label = clientItem.name || clientItem.phone;
+          message += `- ${label}${clientItem.phone ? ` · ${clientItem.phone}` : ""}\n`;
+        }
+        return message.trim();
+      }
+
+      case "RESUMEN_VENTAS": {
+        const period = (classification?.period || "mes").toString().toLowerCase();
+        const now = new Date();
+        const fromDate = new Date(now);
+
+        if (period === "hoy") {
+          fromDate.setHours(0, 0, 0, 0);
+        } else if (period === "semana") {
+          fromDate.setDate(now.getDate() - 7);
+        } else {
+          fromDate.setDate(now.getDate() - 30);
+        }
+
+        const orders = await Order.find({
+          tenant: tenantId,
+          createdAt: { $gte: fromDate },
+          salesStatus: { $ne: "Cancelada" },
+        }).lean();
+
+        if (orders.length === 0) return "No hay ventas en ese período.";
+
+        const revenue = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
+        const avgTicket = revenue / orders.length;
+        return `📈 Ventas (${period}):\n- Operaciones: ${orders.length}\n- Facturación: ${formatMoney(revenue)}\n- Ticket promedio: ${formatMoney(avgTicket)}`;
+      }
+
+      case "METRICAS_NEGOCIO": {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+        const [currentMonthOrders, previousMonthOrders, lowStockCount, activeClients] =
+          await Promise.all([
+            Order.find({
+              tenant: tenantId,
+              createdAt: { $gte: monthStart },
+              salesStatus: { $ne: "Cancelada" },
+            }).lean(),
+            Order.find({
+              tenant: tenantId,
+              createdAt: { $gte: previousMonthStart, $lt: monthStart },
+              salesStatus: { $ne: "Cancelada" },
+            }).lean(),
+            Product.countDocuments({
+              tenant: tenantId,
+              isActive: { $ne: false },
+              $expr: { $lte: ["$stock", "$minStock"] },
+            }),
+            Client.countDocuments({ tenant: tenantId, isActive: { $ne: false } }),
+          ]);
+
+        const currentRevenue = currentMonthOrders.reduce(
+          (sum, order) => sum + Number(order.totalAmount || 0),
+          0,
+        );
+        const previousRevenue = previousMonthOrders.reduce(
+          (sum, order) => sum + Number(order.totalAmount || 0),
+          0,
+        );
+        const growth =
+          previousRevenue > 0
+            ? ((currentRevenue - previousRevenue) / previousRevenue) * 100
+            : currentRevenue > 0
+              ? 100
+              : 0;
+
+        return `📊 Métricas del negocio:\n- Ventas del mes: ${currentMonthOrders.length}\n- Facturación del mes: ${formatMoney(currentRevenue)}\n- Variación vs mes anterior: ${growth.toFixed(1)}%\n- Productos en bajo stock: ${lowStockCount}\n- Clientes activos: ${activeClients}`;
+      }
+
+      case "RECOMENDAR_REPOSICION": {
+        const tenantObjectId = toObjectId(tenantId);
+        if (!tenantObjectId) {
+          return "No pude calcular recomendaciones por un problema de identificación de la empresa.";
+        }
+
+        const since = new Date();
+        since.setDate(since.getDate() - 30);
+
+        const salesByProduct = await Order.aggregate([
+          {
+            $match: {
+              tenant: tenantObjectId,
+              createdAt: { $gte: since },
+              salesStatus: { $ne: "Cancelada" },
+            },
+          },
+          { $unwind: "$items" },
+          {
+            $group: {
+              _id: "$items.productId",
+              soldQty: { $sum: "$items.quantity" },
+            },
+          },
+          { $match: { _id: { $ne: null }, soldQty: { $gt: 0 } } },
+          { $sort: { soldQty: -1 } },
+          { $limit: 30 },
+        ]);
+
+        if (salesByProduct.length === 0) {
+          return "Todavía no hay ventas suficientes para recomendar reposición.";
+        }
+
+        const productIds = salesByProduct.map((item) => item._id);
+        const products = await Product.find({
+          tenant: tenantId,
+          _id: { $in: productIds },
+        })
+          .select("name stock minStock unitOfMeasure")
+          .lean();
+
+        const productMap = new Map(products.map((p) => [String(p._id), p]));
+        const recommendations = salesByProduct
+          .map((item) => {
+            const product = productMap.get(String(item._id));
+            if (!product) return null;
+            const avgDaily = Number(item.soldQty || 0) / 30;
+            const coverDays = avgDaily > 0 ? Number(product.stock || 0) / avgDaily : 999;
+            return {
+              name: product.name,
+              stock: Number(product.stock || 0),
+              minStock: Number(product.minStock || 0),
+              coverDays,
+              unit: product.unitOfMeasure || "un",
+            };
+          })
+          .filter(Boolean)
+          .filter((item) => item.coverDays <= 10 || item.stock <= item.minStock)
+          .sort((a, b) => a.coverDays - b.coverDays)
+          .slice(0, 5);
+
+        if (recommendations.length === 0) {
+          return "✅ Tu reposición viene bien. No veo urgencias para los próximos 10 días.";
+        }
+
+        let message = "🧠 Reposición recomendada:\n";
+        for (const item of recommendations) {
+          message += `- ${item.name}: stock ${item.stock} ${item.unit}, cobertura ~${item.coverDays.toFixed(1)} días\n`;
+        }
+        message += "Sugerencia: prioriza primero los de menor cobertura.";
+        return message.trim();
+      }
+
       case "CHARLA_GENERAL":
       default:
-        return classification.message;
+        return (
+          classification.message ||
+          "Estoy para ayudarte con stock, ventas, clientes, métricas y recomendaciones."
+        );
     }
   } catch (error) {
     console.error("Error IA:", error);
