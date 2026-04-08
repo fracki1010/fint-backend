@@ -7,6 +7,8 @@ const StockMovement = require("../models/stockMovement.model");
 const User = require("../models/user.model");
 
 let cachedWhatsAppOwner = null;
+const MEMORY_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
+const MAX_HISTORY_ITEMS = 80;
 
 const toPositiveNumber = (value) => {
   const parsed = Number(value);
@@ -135,6 +137,74 @@ const toObjectId = (value) => {
   return null;
 };
 
+const pruneConversationHistory = (client) => {
+  const cutoff = Date.now() - MEMORY_WINDOW_MS;
+  const current = Array.isArray(client.conversationHistory)
+    ? client.conversationHistory
+    : [];
+  const recent = current.filter((item) => {
+    const timestamp = new Date(item.createdAt || 0).getTime();
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  });
+  if (recent.length > MAX_HISTORY_ITEMS) {
+    return recent.slice(recent.length - MAX_HISTORY_ITEMS);
+  }
+  return recent;
+};
+
+const appendConversationEntry = (client, role, message) => {
+  if (!message) return;
+  const history = pruneConversationHistory(client);
+  history.push({
+    role,
+    message: message.toString().slice(0, 1200),
+    createdAt: new Date(),
+  });
+  client.conversationHistory = history.slice(-MAX_HISTORY_ITEMS);
+};
+
+const getConversationContext = (client, limit = 12) => {
+  const history = pruneConversationHistory(client).slice(-limit);
+  if (history.length === 0) return "Sin contexto previo.";
+  return history
+    .map((entry) => `${entry.role === "assistant" ? "Asistente" : "Usuario"}: ${entry.message}`)
+    .join("\n");
+};
+
+const resolveSuggestionSelection = (messageBody, options = []) => {
+  const raw = (messageBody || "").toString().trim();
+  if (!raw || options.length === 0) return null;
+  const normalizedReply = normalizeText(raw);
+
+  const choice = Number(normalizedReply);
+  if (Number.isInteger(choice) && choice >= 1 && choice <= options.length) {
+    return options[choice - 1];
+  }
+
+  const exactByName = options.find((option) => normalizeText(option) === normalizedReply);
+  if (exactByName) return exactByName;
+
+  const containsByName = options.find((option) =>
+    normalizeText(option).includes(normalizedReply),
+  );
+  if (containsByName) return containsByName;
+
+  const fuzzy = options
+    .map((option) => ({
+      option,
+      score: levenshteinDistance(option, normalizedReply),
+    }))
+    .sort((a, b) => a.score - b.score)[0];
+
+  if (fuzzy && fuzzy.score <= 3) return fuzzy.option;
+  return null;
+};
+
+const formatNumberedSuggestions = (originalName, suggestions = []) => {
+  const numbered = suggestions.map((name, index) => `${index + 1}. ${name}`).join("\n");
+  return `❌ No encontré "${originalName}".\nQuizás quisiste decir:\n${numbered}\nResponde con el número (1-${suggestions.length}) o escribe el nombre correcto.`;
+};
+
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
     const owner = options.tenantId ? null : await getWhatsAppOwnerId();
@@ -142,6 +212,75 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     let client = await Client.findOne({ tenant: tenantId, phone });
     if (!client) {
       client = await Client.create({ tenant: tenantId, phone, name: "Admin Fint Guard" });
+    }
+
+    client.conversationHistory = pruneConversationHistory(client);
+    appendConversationEntry(client, "user", messageBody);
+
+    // Si quedó una sugerencia pendiente, aceptamos "1/2/3" o nombre.
+    const pendingSuggestionAge =
+      client.pendingSuggestion?.createdAt
+        ? Date.now() - new Date(client.pendingSuggestion.createdAt).getTime()
+        : Number.POSITIVE_INFINITY;
+
+    if (
+      client.pendingSuggestion?.options?.length &&
+      pendingSuggestionAge <= MEMORY_WINDOW_MS
+    ) {
+      const selectedName = resolveSuggestionSelection(
+        messageBody,
+        client.pendingSuggestion.options,
+      );
+
+      if (selectedName) {
+        const pendingIntent = client.pendingSuggestion.intent;
+        const pendingProduct = client.pendingSuggestion.product || {};
+        client.pendingSuggestion = null;
+
+        const classification = {
+          intent: pendingIntent,
+          product: { ...pendingProduct, name: selectedName },
+        };
+        await client.save();
+
+        if (classification.intent === "CONSULTAR_STOCK") {
+          const { product: productoDB } = await findProductByName(
+            tenantId,
+            classification.product.name,
+          );
+          if (!productoDB) {
+            const msg = `No pude encontrar ${classification.product.name}. Intenta escribirlo completo.`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+          const msg = `📦 *${productoDB.name}*\nStock actual: ${productoDB.stock} ${productoDB.unitOfMeasure || "unidades"}\nStock mínimo: ${productoDB.minStock}`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        if (classification.intent === "ENTRADA_STOCK" || classification.intent === "MERMA_STOCK") {
+          client.pendingAction = classification;
+          const msg =
+            classification.intent === "ENTRADA_STOCK"
+              ? `⚠️ Confirma:\n¿Agrego ${classification.product.quantity || 0} unidades de stock al producto *${classification.product.name}* (Motivo: ${classification.product.reason || "Ingreso"})?\n(Sí/No)`
+              : `⚠️ Confirma:\n¿Registro la baja de ${classification.product.quantity || 0} unidades de *${classification.product.name}* por merma/pérdida (Motivo: ${classification.product.reason || "Pérdida"})?\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+      } else {
+        const msg = `No te entendí. Responde con el número de la opción o con el nombre del producto.\n${client.pendingSuggestion.options
+          .map((name, index) => `${index + 1}. ${name}`)
+          .join("\n")}`;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+    } else if (client.pendingSuggestion) {
+      client.pendingSuggestion = null;
+      await client.save();
     }
 
     // --- REGLA 2: ¿HAY UNA ACCIÓN ESPERANDO CONFIRMACIÓN? ---
@@ -157,11 +296,16 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
       if (confData.action === "CANCELAR") {
         client.pendingAction = null;
+        const msg = "❌ Acción cancelada.";
+        appendConversationEntry(client, "assistant", msg);
         await client.save();
-        return "❌ Acción cancelada.";
+        return msg;
       }
       if (confData.action === "INDECISO") {
-        return "⚠️ Por favor, responde 'Sí' para confirmar o 'No' para cancelar.";
+        const msg = "⚠️ Por favor, responde 'Sí' para confirmar o 'No' para cancelar.";
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
       }
 
       // Si confirmó, sacamos la acción de la memoria para ejecutarla abajo
@@ -172,9 +316,12 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       // --- SI NO HAY ACCIÓN PENDIENTE, CLASIFICAMOS EL MENSAJE ---
 
       // REGLA 3: Router operativo para asistente-gestor.
+      const conversationContext = getConversationContext(client);
       const routerPrompt = `
             Eres el asistente virtual operativo de una empresa en Fint Guard.
             Debes ser claro, breve y práctico. Siempre con enfoque en control de stock, ventas y clientes.
+            Contexto de conversación reciente (últimos 5 días):
+            ${conversationContext}
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
             1. Crear producto: { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0 } }
             2. Nuevo pedido: { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
@@ -206,11 +353,13 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         classification.intent === "MERMA_STOCK"
       ) {
         client.pendingAction = classification;
-        await client.save();
 
         if (classification.intent === "CREAR_PRODUCTO") {
           const product = classification.product || {};
-          return `⚠️ Confirma:\n¿Guardo el producto *${product.name || "sin nombre"}* a $${product.price || 0} con ${product.stock || 0} de stock?\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name || "sin nombre"}* a $${product.price || 0} con ${product.stock || 0} de stock?\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } else if (classification.intent === "NUEVO_PEDIDO") {
           const detailsItems = Array.isArray(classification.order?.items)
             ? classification.order.items
@@ -218,16 +367,27 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           const detalles = detailsItems
             .map((i) => `${i.quantity}x ${i.product}`)
             .join(", ");
-          return `⚠️ Confirma:\n¿Registro la venta de: ${detalles}?\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Registro la venta de: ${detalles}?\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } else if (classification.intent === "ENTRADA_STOCK") {
           const product = classification.product || {};
-          return `⚠️ Confirma:\n¿Agrego ${product.quantity || 0} unidades de stock al producto *${product.name || "sin nombre"}* (Motivo: ${product.reason || "Ingreso"})?\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Agrego ${product.quantity || 0} unidades de stock al producto *${product.name || "sin nombre"}* (Motivo: ${product.reason || "Ingreso"})?\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } else if (classification.intent === "MERMA_STOCK") {
           const product = classification.product || {};
-          return `⚠️ Confirma:\n¿Registro la baja de ${product.quantity || 0} unidades de *${product.name || "sin nombre"}* por merma/pérdida (Motivo: ${product.reason || "Pérdida"})?\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Registro la baja de ${product.quantity || 0} unidades de *${product.name || "sin nombre"}* por merma/pérdida (Motivo: ${product.reason || "Pérdida"})?\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         }
       }
     }
+
+    client.pendingSuggestion = null;
 
     // --- EJECUCIÓN (Solo llega aquí si se acaba de confirmar o si es una charla/consulta) ---
     switch (classification.intent) {
@@ -431,9 +591,21 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             await session.abortTransaction();
             session.endSession();
             if (suggestions.length > 0) {
-              return `❌ Producto no encontrado: ${name}. ¿Quisiste decir: ${suggestions.join(", ")}?`;
+              client.pendingSuggestion = {
+                intent: "ENTRADA_STOCK",
+                product: { name, quantity: qty, reason },
+                options: suggestions,
+                createdAt: new Date().toISOString(),
+              };
+              const msg = formatNumberedSuggestions(name, suggestions);
+              appendConversationEntry(client, "assistant", msg);
+              await client.save();
+              return msg;
             }
-            return `❌ Producto no encontrado: ${name}. Si quieres crearlo, dímelo.`;
+            const msg = `❌ Producto no encontrado: ${name}. Si quieres crearlo, dímelo.`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
           }
 
           const stockAnterior = productoDB.stock;
@@ -487,9 +659,21 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             await session.abortTransaction();
             session.endSession();
             if (suggestions.length > 0) {
-              return `❌ Producto no encontrado: ${name}. ¿Quisiste decir: ${suggestions.join(", ")}?`;
+              client.pendingSuggestion = {
+                intent: "MERMA_STOCK",
+                product: { name, quantity: qty, reason },
+                options: suggestions,
+                createdAt: new Date().toISOString(),
+              };
+              const msg = formatNumberedSuggestions(name, suggestions);
+              appendConversationEntry(client, "assistant", msg);
+              await client.save();
+              return msg;
             }
-            return `❌ Producto no encontrado: ${name}.`;
+            const msg = `❌ Producto no encontrado: ${name}.`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
           }
 
           const stockAnterior = productoDB.stock;
@@ -538,12 +722,27 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         );
 
         if (productoDB) {
-          return `📦 *${productoDB.name}*\nStock actual: ${productoDB.stock} ${productoDB.unitOfMeasure || "unidades"}\nStock mínimo: ${productoDB.minStock}`;
+          const msg = `📦 *${productoDB.name}*\nStock actual: ${productoDB.stock} ${productoDB.unitOfMeasure || "unidades"}\nStock mínimo: ${productoDB.minStock}`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } else {
           if (suggestions.length > 0) {
-            return `❌ No encontré "${name}". ¿Quisiste decir: ${suggestions.join(", ")}?`;
+            client.pendingSuggestion = {
+              intent: "CONSULTAR_STOCK",
+              product: { name },
+              options: suggestions,
+              createdAt: new Date().toISOString(),
+            };
+            const msg = formatNumberedSuggestions(name, suggestions);
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
           }
-          return `❌ No encontré ningún producto llamado "${name}".`;
+          const msg = `❌ No encontré ningún producto llamado "${name}".`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         }
       }
 
@@ -762,10 +961,14 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
       case "CHARLA_GENERAL":
       default:
-        return (
+        {
+          const msg =
           classification.message ||
-          "Estoy para ayudarte con stock, ventas, clientes, métricas y recomendaciones."
-        );
+          "Estoy para ayudarte con stock, ventas, clientes, métricas y recomendaciones.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
     }
   } catch (error) {
     console.error("Error IA:", error);
