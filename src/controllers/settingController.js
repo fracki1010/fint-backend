@@ -12,6 +12,29 @@ const sanitizeText = (value, fallback = "") => {
   return value.toString().trim();
 };
 
+const normalizeWhatsAppNumber = (value = "") =>
+  value
+    .toString()
+    .trim()
+    .replace(/[^\d]/g, "");
+
+const normalizeWhatsAppNumbers = (value, fallback = []) => {
+  if (value === undefined) return fallback;
+
+  const source = Array.isArray(value)
+    ? value
+    : value
+        .toString()
+        .split(/[\n,;]+/g)
+        .map((item) => item.trim());
+
+  const normalized = source
+    .map((item) => normalizeWhatsAppNumber(item))
+    .filter(Boolean);
+
+  return [...new Set(normalized)];
+};
+
 const buildAdminPayload = (
   adminInput = {},
   fallback = {},
@@ -66,6 +89,11 @@ exports.getSettings = async (req, res) => {
       await settings.save();
     }
 
+    if (!Array.isArray(settings.whatsappAuthorizedNumbers)) {
+      settings.whatsappAuthorizedNumbers = [];
+      await settings.save();
+    }
+
     res.json(settings);
   } catch (error) {
     return handleServerError(res, error, "Error al obtener configuración");
@@ -103,6 +131,14 @@ exports.updateSettings = async (req, res) => {
       phone: institutionalData.phone,
       email: institutionalData.email,
       invoiceTerms: institutionalData.invoiceTerms,
+      whatsappAdminNumber:
+        updateData.whatsappAdminNumber !== undefined
+          ? normalizeWhatsAppNumber(updateData.whatsappAdminNumber)
+          : settings?.whatsappAdminNumber || "",
+      whatsappAuthorizedNumbers: normalizeWhatsAppNumbers(
+        updateData.whatsappAuthorizedNumbers,
+        settings?.whatsappAuthorizedNumbers || [],
+      ),
       admin:
         updateData.admin !== undefined
           ? buildAdminPayload(updateData.admin, settings?.admin || {}, institutionalData)

@@ -36,11 +36,10 @@ const getWhatsAppOwnerId = async () => {
   return cachedWhatsAppOwner;
 };
 
-const handleIncomingMessage = async (phone, messageBody) => {
+const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
-    const owner = await getWhatsAppOwnerId();
-    const userId = owner.userId;
-    const tenantId = owner.tenantId;
+    const owner = options.tenantId ? null : await getWhatsAppOwnerId();
+    const tenantId = options.tenantId || owner?.tenantId;
     let client = await Client.findOne({ tenant: tenantId, phone });
     if (!client) {
       client = await Client.create({ tenant: tenantId, phone, name: "Admin Fint Guard" });

@@ -161,6 +161,10 @@ const settingUpdateBody = z.object({
   currency: z.string().trim().optional(),
   theme: z.enum(["light", "dark"]).optional(),
   whatsappEnabled: z.boolean().optional(),
+  whatsappAdminNumber: z.string().trim().optional(),
+  whatsappAuthorizedNumbers: z
+    .union([z.array(z.string().trim()), z.string().trim()])
+    .optional(),
   lowStockThreshold: z.coerce.number().min(0).optional(),
   orderPrefix: z.string().trim().optional(),
   allowDeliveryWithoutPayment: z.boolean().optional(),

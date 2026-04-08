@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { transcribeAudio } = require("./groqService");
 const { handleIncomingMessage } = require("../controllers/iaController"); // Importamos el controlador
+const Setting = require("../models/setting.model");
 
 // Asegurarnos de que exista una carpeta temporal para los audios
 const tempDir = path.join(__dirname, "../../temp");
@@ -17,7 +18,44 @@ let qrCodeDataUrl = null;
 let lastQrText = null;
 let lastError = null;
 let lastEventAt = null;
-let warnedMissingAdminId = false;
+
+const normalizeWhatsAppNumber = (value = "") =>
+  value
+    .toString()
+    .trim()
+    .replace(/[^\d]/g, "");
+
+const resolveTenantBySender = async (senderId) => {
+  const senderNumber = normalizeWhatsAppNumber(senderId);
+  if (!senderNumber) {
+    return { senderNumber, access: "denied", tenantId: null };
+  }
+
+  const matches = await Setting.find({
+    whatsappEnabled: true,
+    $or: [
+      { whatsappAdminNumber: senderNumber },
+      { whatsappAuthorizedNumbers: senderNumber },
+    ],
+  })
+    .select("tenant storeName whatsappAdminNumber whatsappAuthorizedNumbers")
+    .limit(2)
+    .lean();
+
+  if (matches.length === 0) {
+    return { senderNumber, access: "denied", tenantId: null };
+  }
+
+  if (matches.length > 1) {
+    return { senderNumber, access: "ambiguous", tenantId: null };
+  }
+
+  return {
+    senderNumber,
+    access: "allowed",
+    tenantId: matches[0].tenant,
+  };
+};
 
 const updateStatus = (nextStatus, errorMessage = null) => {
   connectionStatus = nextStatus;
@@ -69,28 +107,29 @@ const bindWhatsAppEvents = (instance) => {
   instance.on("message", async (message) => {
     if (message.from === "status@broadcast") return;
 
-    // REGLA 1: Solo el Admin puede interactuar con el bot
-    const adminId = process.env.WHATSAPP_ADMIN_ID
-      ? process.env.WHATSAPP_ADMIN_ID.trim()
-      : "";
-
-    if (!adminId && !warnedMissingAdminId) {
-      warnedMissingAdminId = true;
-      console.error(
-        "WHATSAPP_ADMIN_ID no está configurado. Se bloquearán mensajes entrantes.",
-      );
-    }
-
-    if (message.from !== adminId) {
-      console.log(`⛔ Intento de acceso denegado de: ${message.from}`);
-      await instance.sendMessage(
-        message.from,
-        "Hola. Soy un agente virtual exclusivo de la empresa Fint Guard. No estoy autorizado para responder a este número.",
-      );
-      return;
-    }
-
     try {
+      const senderAccess = await resolveTenantBySender(message.from);
+
+      if (senderAccess.access === "ambiguous") {
+        console.error(
+          `Configuracion WhatsApp ambigua para el numero ${senderAccess.senderNumber}`,
+        );
+        await instance.sendMessage(
+          message.from,
+          "Tu numero aparece en mas de una empresa. Contacta al administrador para corregir la configuracion.",
+        );
+        return;
+      }
+
+      if (senderAccess.access !== "allowed" || !senderAccess.tenantId) {
+        console.log(`⛔ Intento de acceso denegado de: ${message.from}`);
+        await instance.sendMessage(
+          message.from,
+          "Hola. Este numero no esta autorizado para usar el asistente de esta empresa.",
+        );
+        return;
+      }
+
       let messageText = message.body;
 
       // Detectar si el mensaje es un audio (nota de voz)
@@ -123,6 +162,7 @@ const bindWhatsAppEvents = (instance) => {
         const iaResponse = await handleIncomingMessage(
           message.from,
           messageText,
+          { tenantId: senderAccess.tenantId },
         );
         await instance.sendMessage(message.from, iaResponse);
       }
