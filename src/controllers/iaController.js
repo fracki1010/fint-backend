@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const { processText } = require("../services/groqService");
 const Client = require("../models/client.model");
-const { Product } = require("../models/product.model");
+const { Product, UNIT_OPTIONS } = require("../models/product.model");
 const Order = require("../models/order.model");
 const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
@@ -20,6 +20,89 @@ const toPositiveNumber = (value) => {
 };
 
 const normalizePhone = (value = "") => value.toString().trim();
+
+const normalizeUnit = (value = "") => {
+  const raw = normalizeText(value);
+  if (!raw) return "";
+  const aliases = {
+    unidad: "unidad",
+    unidades: "unidad",
+    un: "unidad",
+    caja: "caja",
+    cajas: "caja",
+    paquete: "paquete",
+    paquetes: "paquete",
+    bolsa: "bolsa",
+    bolsas: "bolsa",
+    botella: "botella",
+    botellas: "botella",
+    kg: "kg",
+    kilo: "kg",
+    kilos: "kg",
+    g: "g",
+    gr: "g",
+    gramo: "g",
+    gramos: "g",
+    litro: "litro",
+    litros: "litro",
+    l: "litro",
+    ml: "ml",
+    mililitro: "ml",
+    mililitros: "ml",
+    metro: "metro",
+    metros: "metro",
+    m: "metro",
+  };
+  const normalized = aliases[raw] || raw;
+  return UNIT_OPTIONS.includes(normalized) ? normalized : "";
+};
+
+const parseNumberOrNull = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const validateClientDraft = (rawClient = {}) => {
+  const payload = rawClient || {};
+  const normalized = {
+    name: (payload.name || "").toString().trim(),
+    phone: normalizePhone(payload.phone || ""),
+    taxId: (payload.taxId || "").toString().trim(),
+  };
+  const missing = [];
+  if (!normalized.name) missing.push("nombre");
+  if (!normalized.phone) missing.push("telefono");
+  if (!normalized.taxId) missing.push("documento fiscal");
+  return { normalized, missing };
+};
+
+const validateProductDraft = (rawProduct = {}) => {
+  const payload = rawProduct || {};
+  const normalized = {
+    name: (payload.name || "").toString().trim(),
+    price: parseNumberOrNull(payload.price),
+    stock: parseNumberOrNull(payload.stock),
+    unitOfMeasure: normalizeUnit(payload.unitOfMeasure || payload.unit || ""),
+    costPrice: parseNumberOrNull(
+      payload.costPrice !== undefined ? payload.costPrice : payload.cost,
+    ),
+  };
+
+  const missing = [];
+  if (!normalized.name) missing.push("nombre");
+  if (normalized.price === null) missing.push("precio");
+  if (normalized.stock === null) missing.push("stock");
+  if (!normalized.unitOfMeasure) missing.push("unidad");
+  if (normalized.costPrice === null) missing.push("costo");
+
+  const invalid = [];
+  if (normalized.price !== null && normalized.price < 0) invalid.push("precio no puede ser negativo");
+  if (normalized.stock !== null && normalized.stock < 0) invalid.push("stock no puede ser negativo");
+  if (normalized.costPrice !== null && normalized.costPrice < 0)
+    invalid.push("costo no puede ser negativo");
+
+  return { normalized, missing, invalid };
+};
 
 const getWhatsAppOwnerId = async () => {
   if (cachedWhatsAppOwner) return cachedWhatsAppOwner;
@@ -694,7 +777,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             Contexto de conversación reciente (últimos 5 días):
             ${conversationContext}
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
-            1. Crear producto: { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0 } }
+            1. Crear producto (siempre completo): { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0, "unitOfMeasure": "unidad|caja|kg|litro|...", "costPrice": 0 } }
             2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "taxId": "..." } }
             3. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
             4. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
@@ -812,38 +895,59 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         classification.intent === "ENTRADA_STOCK" ||
         classification.intent === "MERMA_STOCK"
       ) {
-        client.pendingAction = classification;
-
         if (classification.intent === "CREAR_CLIENTE") {
-          const nextClient = classification.client || {};
-          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name || "sin nombre"}* con teléfono *${nextClient.phone || "-"}* y documento *${nextClient.taxId || "-"}*?\n(Sí/No)`;
+          const validation = validateClientDraft(classification.client || {});
+          if (validation.missing.length > 0) {
+            const msg = `Para crear cliente necesito todos los datos obligatorios.\nFalta: ${validation.missing.join(", ")}.\nEjemplo: crear cliente Juan Perez, telefono 2622517447, documento 20333444556`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          client.pendingAction = {
+            intent: "CREAR_CLIENTE",
+            client: validation.normalized,
+          };
+          const nextClient = validation.normalized;
+          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name}* con teléfono *${nextClient.phone}* y documento *${nextClient.taxId}*?\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
         } else if (classification.intent === "CREAR_PRODUCTO") {
-          const product = classification.product || {};
-          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name || "sin nombre"}* a $${product.price || 0} con ${product.stock || 0} de stock?\n(Sí/No)`;
-          appendConversationEntry(client, "assistant", msg);
-          await client.save();
-          return msg;
-        } else if (classification.intent === "NUEVO_PEDIDO") {
-          const detailsItems = Array.isArray(classification.order?.items)
-            ? classification.order.items
-            : [];
-          const detalles = detailsItems
-            .map((i) => `${i.quantity}x ${i.product}`)
-            .join(", ");
-          const msg = `⚠️ Confirma:\n¿Registro la venta de: ${detalles}?\n(Sí/No)`;
+          const validation = validateProductDraft(classification.product || {});
+          if (validation.missing.length > 0 || validation.invalid.length > 0) {
+            const missingText =
+              validation.missing.length > 0
+                ? `Falta: ${validation.missing.join(", ")}.`
+                : "";
+            const invalidText =
+              validation.invalid.length > 0
+                ? `Datos inválidos: ${validation.invalid.join(", ")}.`
+                : "";
+            const msg = `Para crear producto necesito todos los datos obligatorios.\n${missingText}\n${invalidText}\nEjemplo: crear producto Yerba, precio 1200, costo 900, stock 20, unidad paquete`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          client.pendingAction = {
+            intent: "CREAR_PRODUCTO",
+            product: validation.normalized,
+          };
+          const product = validation.normalized;
+          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name}*?\n💵 Precio: ${formatMoney(product.price)}\n💰 Costo: ${formatMoney(product.costPrice)}\n📦 Stock: ${product.stock}\n📐 Unidad: ${product.unitOfMeasure}\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
         } else if (classification.intent === "ENTRADA_STOCK") {
+          client.pendingAction = classification;
           const product = classification.product || {};
           const msg = `⚠️ Confirma:\n¿Agrego ${product.quantity || 0} unidades de stock al producto *${product.name || "sin nombre"}* (Motivo: ${product.reason || "Ingreso"})?\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
         } else if (classification.intent === "MERMA_STOCK") {
+          client.pendingAction = classification;
           const product = classification.product || {};
           const msg = `⚠️ Confirma:\n¿Registro la baja de ${product.quantity || 0} unidades de *${product.name || "sin nombre"}* por merma/pérdida (Motivo: ${product.reason || "Pérdida"})?\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
@@ -858,17 +962,15 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     // --- EJECUCIÓN (Solo llega aquí si se acaba de confirmar o si es una charla/consulta) ---
     switch (classification.intent) {
       case "CREAR_CLIENTE": {
-        const payload = classification.client || {};
-        const clientName = (payload.name || "").toString().trim();
-        const clientPhone = normalizePhone(payload.phone || "");
-        const clientTaxId = (payload.taxId || "").toString().trim();
-
-        if (!clientName || !clientPhone) {
-          const msg = "❌ Para crear el cliente necesito al menos nombre y teléfono.";
+        const validation = validateClientDraft(classification.client || {});
+        if (validation.missing.length > 0) {
+          const msg = `❌ No puedo crear el cliente porque faltan datos: ${validation.missing.join(", ")}.`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
         }
+        const { name: clientName, phone: clientPhone, taxId: clientTaxId } =
+          validation.normalized;
 
         const existingClient = await Client.findOne({
           tenant: tenantId,
@@ -909,11 +1011,27 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
 
       case "CREAR_PRODUCTO": {
-        const { name, price, stock } = classification.product || {};
+        const validation = validateProductDraft(classification.product || {});
+        if (validation.missing.length > 0 || validation.invalid.length > 0) {
+          const msg = `❌ No puedo crear el producto.\n${
+            validation.missing.length > 0
+              ? `Falta: ${validation.missing.join(", ")}.\n`
+              : ""
+          }${
+            validation.invalid.length > 0
+              ? `Datos inválidos: ${validation.invalid.join(", ")}.`
+              : ""
+          }`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const { name, price, stock, unitOfMeasure, costPrice } = validation.normalized;
         const productName = (name || "").toString().trim().toLowerCase();
-        const rawStock = Number(stock);
-        const stockDelta = Number.isFinite(rawStock) ? rawStock : 0;
-        const safePrice = Number(price) || 0;
+        const stockDelta = Number(stock);
+        const safePrice = Number(price);
+        const safeCostPrice = Number(costPrice);
         const session = await mongoose.startSession();
 
         if (!productName) {
@@ -933,7 +1051,13 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
           const producto = await Product.findOneAndUpdate(
             { tenant: tenantId, name: productName },
-            { tenant: tenantId, price: safePrice, $inc: { stock: stockDelta } },
+            {
+              tenant: tenantId,
+              price: safePrice,
+              costPrice: safeCostPrice,
+              unitOfMeasure,
+              $inc: { stock: stockDelta },
+            },
             { returnDocument: "after", upsert: true, session },
           );
 
