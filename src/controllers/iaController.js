@@ -118,6 +118,58 @@ const findProductByName = async (tenantId, rawName, session = null) => {
   return { product: null, suggestions };
 };
 
+const findClientByName = async (tenantId, rawName) => {
+  const requested = (rawName || "").toString().trim();
+  if (!requested) return { client: null, suggestions: [] };
+
+  const exactRegex = new RegExp(`^${escapeRegex(requested)}$`, "i");
+  let matchedClient = await Client.findOne({
+    tenant: tenantId,
+    isActive: { $ne: false },
+    $or: [{ name: exactRegex }, { phone: exactRegex }],
+  });
+
+  if (!matchedClient) {
+    const containsRegex = new RegExp(escapeRegex(requested), "i");
+    matchedClient = await Client.findOne({
+      tenant: tenantId,
+      isActive: { $ne: false },
+      $or: [{ name: containsRegex }, { phone: containsRegex }],
+    });
+  }
+
+  if (matchedClient) return { client: matchedClient, suggestions: [] };
+
+  const candidates = await Client.find({
+    tenant: tenantId,
+    isActive: { $ne: false },
+  })
+    .select("name phone")
+    .limit(200)
+    .lean();
+
+  const requestedNormalized = normalizeText(requested);
+  const suggestions = candidates
+    .map((candidate) => {
+      const label = (candidate.name || candidate.phone || "").toString();
+      const normalized = normalizeText(label);
+      return {
+        name: label,
+        score: levenshteinDistance(requestedNormalized, normalized),
+        contains: normalized.includes(requestedNormalized),
+      };
+    })
+    .filter((item) => Boolean(item.name))
+    .sort((a, b) => {
+      if (a.contains !== b.contains) return a.contains ? -1 : 1;
+      return a.score - b.score;
+    })
+    .slice(0, 3)
+    .map((item) => item.name);
+
+  return { client: null, suggestions };
+};
+
 const formatMoney = (value) => `$${Number(value || 0).toFixed(2)}`;
 
 const safeJsonParse = (raw) => {
@@ -205,6 +257,120 @@ const formatNumberedSuggestions = (originalName, suggestions = []) => {
   return `❌ No encontré "${originalName}".\nQuizás quisiste decir:\n${numbered}\nResponde con el número (1-${suggestions.length}) o escribe el nombre correcto.`;
 };
 
+const buildOrderDraft = async (tenantId, orderData = {}) => {
+  const requestedClientName = (orderData?.clientName || "").toString().trim();
+  if (!requestedClientName) {
+    return { ok: false, code: "CLIENT_REQUIRED" };
+  }
+
+  const clientLookup = await findClientByName(tenantId, requestedClientName);
+  if (!clientLookup.client) {
+    return {
+      ok: false,
+      code: "CLIENT_NOT_FOUND",
+      requestedClientName,
+      suggestions: clientLookup.suggestions || [],
+    };
+  }
+
+  const requestedItems = Array.isArray(orderData?.items) ? orderData.items : [];
+  if (requestedItems.length === 0) {
+    return { ok: false, code: "ITEMS_REQUIRED", client: clientLookup.client };
+  }
+
+  const items = [];
+  const missingProducts = [];
+  const insufficientStock = [];
+  let totalAmount = 0;
+
+  for (const item of requestedItems) {
+    const quantity = toPositiveNumber(item?.quantity);
+    if (!quantity) continue;
+
+    const lookup = await findProductByName(tenantId, item?.product || "");
+    if (!lookup.product) {
+      missingProducts.push({
+        requested: item?.product || "",
+        suggestions: lookup.suggestions || [],
+      });
+      continue;
+    }
+
+    if (Number(lookup.product.stock || 0) < quantity) {
+      insufficientStock.push({
+        name: lookup.product.name,
+        requestedQty: quantity,
+        availableQty: Number(lookup.product.stock || 0),
+      });
+      continue;
+    }
+
+    const unitPrice = Number(lookup.product.price || 0);
+    const subtotal = unitPrice * quantity;
+    totalAmount += subtotal;
+    items.push({
+      productId: lookup.product._id,
+      productName: lookup.product.name,
+      quantity,
+      unitPrice,
+      subtotal,
+      unitCostAtSale: Number(lookup.product.costPrice) || 0,
+    });
+  }
+
+  if (items.length === 0) {
+    return {
+      ok: false,
+      code: "NO_VALID_ITEMS",
+      client: clientLookup.client,
+      missingProducts,
+      insufficientStock,
+    };
+  }
+
+  return {
+    ok: true,
+    client: clientLookup.client,
+    items,
+    totalAmount,
+    missingProducts,
+    insufficientStock,
+  };
+};
+
+const formatOrderDraftMessage = (draft) => {
+  const lines = ["🧾 Resumen de orden:", `Cliente: ${draft.client.name || draft.client.phone}`];
+  draft.items.forEach((item, index) => {
+    lines.push(
+      `${index + 1}. ${item.productName} · ${item.quantity} x ${formatMoney(item.unitPrice)} = ${formatMoney(item.subtotal)}`,
+    );
+  });
+  lines.push(`Total: ${formatMoney(draft.totalAmount)}`);
+
+  if (draft.missingProducts?.length) {
+    lines.push(
+      `No encontrados: ${draft.missingProducts
+        .map((item) =>
+          item.suggestions?.length
+            ? `${item.requested} (quizás: ${item.suggestions.join(", ")})`
+            : item.requested,
+        )
+        .join(" | ")}`,
+    );
+  }
+
+  if (draft.insufficientStock?.length) {
+    lines.push(
+      `Sin stock suficiente: ${draft.insufficientStock
+        .map((item) => `${item.name} (${item.requestedQty} solicitado / ${item.availableQty} disponible)`)
+        .join(" | ")}`,
+    );
+  }
+
+  lines.push("¿Confirmo y creo la venta? (Sí/No)");
+  return lines.join("\n");
+};
+
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
     const owner = options.tenantId ? null : await getWhatsAppOwnerId();
@@ -270,6 +436,65 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           await client.save();
           return msg;
         }
+
+        if (classification.intent === "CONSULTAR_CLIENTE") {
+          const { client: matchedClient } = await findClientByName(
+            tenantId,
+            classification.client?.name || selectedName,
+          );
+          if (!matchedClient) {
+            const msg = "No pude encontrar ese cliente. Intenta con otro nombre.";
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          const recentOrders = await Order.find({
+            tenant: tenantId,
+            client: matchedClient._id,
+          })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .lean();
+
+          const totalSpent = recentOrders.reduce(
+            (sum, order) => sum + Number(order.totalAmount || 0),
+            0,
+          );
+          const msg = `👤 Cliente: ${matchedClient.name || matchedClient.phone}\nTel: ${matchedClient.phone || "-"}\nDeuda: ${formatMoney(matchedClient.debt || 0)}\nÚltimas ventas: ${recentOrders.length}\nMonto (últimas 5): ${formatMoney(totalSpent)}`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        if (classification.intent === "NUEVO_PEDIDO") {
+          const orderWithSelectedClient = {
+            ...(client.pendingSuggestion.order || {}),
+            clientName: selectedName,
+          };
+          const draft = await buildOrderDraft(tenantId, orderWithSelectedClient);
+          if (!draft.ok) {
+            const msg = "No pude preparar la orden con ese cliente. Repite el pedido indicando cliente y productos.";
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          client.pendingAction = {
+            intent: "NUEVO_PEDIDO",
+            orderDraft: {
+              clientId: draft.client._id,
+              items: draft.items,
+              totalAmount: draft.totalAmount,
+              missingProducts: draft.missingProducts,
+              insufficientStock: draft.insufficientStock,
+            },
+          };
+          const msg = formatOrderDraftMessage(draft);
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
       } else {
         const msg = `No te entendí. Responde con el número de la opción o con el nombre del producto.\n${client.pendingSuggestion.options
           .map((name, index) => `${index + 1}. ${name}`)
@@ -324,7 +549,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             ${conversationContext}
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
             1. Crear producto: { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0 } }
-            2. Nuevo pedido: { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
+            2. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
             3. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
             4. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
             5. Consultar stock: { "intent": "CONSULTAR_STOCK", "product": { "name": "..." } }
@@ -334,7 +559,8 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             9. Resumen ventas: { "intent": "RESUMEN_VENTAS", "period": "hoy|semana|mes" }
             10. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
             11. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
-            12. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
+            12. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
+            13. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
             `;
 
       const jsonString = await processText(messageBody, routerPrompt);
@@ -346,9 +572,93 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
       // --- FASE DE CONFIRMACIÓN ---
       // Si detectamos que quiere crear algo, lo guardamos en 'pendingAction' y detenemos la ejecución
+      if (classification.intent === "NUEVO_PEDIDO") {
+        const draft = await buildOrderDraft(tenantId, classification.order || {});
+
+        if (!draft.ok) {
+          if (draft.code === "CLIENT_REQUIRED") {
+            const msg =
+              "Para crear la venta necesito el cliente. Ejemplo: 'venta para Juan Perez: 2 coca cola y 1 arroz'.";
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          if (draft.code === "CLIENT_NOT_FOUND") {
+            if (draft.suggestions?.length) {
+              client.pendingSuggestion = {
+                intent: "NUEVO_PEDIDO",
+                kind: "client",
+                order: classification.order || {},
+                options: draft.suggestions,
+                createdAt: new Date().toISOString(),
+              };
+              const msg = formatNumberedSuggestions(
+                draft.requestedClientName || "cliente",
+                draft.suggestions,
+              );
+              appendConversationEntry(client, "assistant", msg);
+              await client.save();
+              return msg;
+            }
+            const msg = `No encontré el cliente "${draft.requestedClientName}". Puedo mostrarte clientes si quieres.`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          if (draft.code === "ITEMS_REQUIRED") {
+            const msg = "Indícame al menos un producto con cantidad para armar la venta.";
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          if (draft.code === "NO_VALID_ITEMS") {
+            const missingText =
+              draft.missingProducts?.length > 0
+                ? `\nNo encontrados: ${draft.missingProducts
+                    .map((item) =>
+                      item.suggestions?.length
+                        ? `${item.requested} (quizás: ${item.suggestions.join(", ")})`
+                        : item.requested,
+                    )
+                    .join(" | ")}`
+                : "";
+            const insufficientText =
+              draft.insufficientStock?.length > 0
+                ? `\nSin stock: ${draft.insufficientStock
+                    .map(
+                      (item) =>
+                        `${item.name} (${item.requestedQty} solicitado / ${item.availableQty} disponible)`,
+                    )
+                    .join(" | ")}`
+                : "";
+            const msg = `No pude armar la venta con los productos indicados.${missingText}${insufficientText}`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+        }
+
+        client.pendingAction = {
+          intent: "NUEVO_PEDIDO",
+          orderDraft: {
+            clientId: draft.client._id,
+            items: draft.items,
+            totalAmount: draft.totalAmount,
+            missingProducts: draft.missingProducts,
+            insufficientStock: draft.insufficientStock,
+          },
+        };
+        const msg = formatOrderDraftMessage(draft);
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
       if (
         classification.intent === "CREAR_PRODUCTO" ||
-        classification.intent === "NUEVO_PEDIDO" ||
         classification.intent === "ENTRADA_STOCK" ||
         classification.intent === "MERMA_STOCK"
       ) {
@@ -452,10 +762,26 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
 
       case "NUEVO_PEDIDO": {
-        const orderData = classification.order;
-        const requestedItems = Array.isArray(orderData?.items) ? orderData.items : [];
-        if (requestedItems.length === 0) {
-          return "❌ No se detectaron productos en el pedido.";
+        const draft =
+          classification.orderDraft ||
+          (await (async () => {
+            const built = await buildOrderDraft(tenantId, classification.order || {});
+            if (!built.ok) return null;
+            return {
+              clientId: built.client._id,
+              items: built.items,
+              totalAmount: built.totalAmount,
+              missingProducts: built.missingProducts,
+              insufficientStock: built.insufficientStock,
+            };
+          })());
+
+        if (!draft || !Array.isArray(draft.items) || draft.items.length === 0) {
+          const msg =
+            "No pude ejecutar la venta porque faltan datos. Indica cliente y productos para reconstruir la orden.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         }
 
         const session = await mongoose.startSession();
@@ -467,24 +793,18 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           const noEncontrados = [];
           const movimientosPendientes = [];
 
-          for (const item of requestedItems) {
+          for (const item of draft.items) {
             const quantity = toPositiveNumber(item?.quantity);
             if (!quantity) continue;
 
-            const { product: productoDB, suggestions } = await findProductByName(
-              tenantId,
-              item.product,
+            const productId = toObjectId(item.productId);
+            const productoDB = await withSession(
+              Product.findOne({ tenant: tenantId, _id: productId }),
               session,
             );
 
             if (!productoDB) {
-              if (suggestions.length > 0) {
-                noEncontrados.push(
-                  `${item.product} (quizás quisiste: ${suggestions.join(", ")})`,
-                );
-              } else {
-                noEncontrados.push(item.product);
-              }
+              noEncontrados.push(item.productName || "producto");
               continue;
             }
 
@@ -494,13 +814,15 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
               );
             }
 
-            totalAmount += productoDB.price * quantity;
+            const unitPrice = Number(item.unitPrice || productoDB.price || 0);
+            totalAmount += unitPrice * quantity;
             itemsParaGuardar.push({
               product: productoDB.name,
               quantity,
-              price: productoDB.price,
+              price: unitPrice,
               productId: productoDB._id,
-              unitCostAtSale: Number(productoDB.costPrice) || 0,
+              unitCostAtSale:
+                Number(item.unitCostAtSale) || Number(productoDB.costPrice) || 0,
             });
 
             const stockAnterior = productoDB.stock;
@@ -528,7 +850,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             [
               {
                 tenant: tenantId,
-                client: client._id,
+                client: draft.clientId,
                 items: itemsParaGuardar,
                 totalAmount,
                 status: "Entregado",
@@ -562,6 +884,8 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           if (noEncontrados.length > 0) {
             resp += `⚠️ Faltó: ${noEncontrados.join(", ")}`;
           }
+          appendConversationEntry(client, "assistant", resp.trim());
+          await client.save();
           return resp;
         } catch (error) {
           await session.abortTransaction();
@@ -761,7 +1085,61 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         productos.forEach((p) => {
           msj += `- ${p.name}: ${p.stock} (Mínimo: ${p.minStock})\n`;
         });
+        appendConversationEntry(client, "assistant", msj.trim());
+        await client.save();
         return msj;
+      }
+
+      case "CONSULTAR_CLIENTE": {
+        const requestedName = (classification?.client?.name || "").toString().trim();
+        if (!requestedName) {
+          const msg = "Indícame el nombre o teléfono del cliente para buscarlo.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const lookup = await findClientByName(tenantId, requestedName);
+        if (!lookup.client) {
+          if (lookup.suggestions?.length) {
+            client.pendingSuggestion = {
+              intent: "CONSULTAR_CLIENTE",
+              kind: "client",
+              client: { name: requestedName },
+              options: lookup.suggestions,
+              createdAt: new Date().toISOString(),
+            };
+            const msg = formatNumberedSuggestions(requestedName, lookup.suggestions);
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+          const msg = `No encontré el cliente "${requestedName}".`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const recentOrders = await Order.find({
+          tenant: tenantId,
+          client: lookup.client._id,
+        })
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .lean();
+
+        const totalSpent = recentOrders.reduce(
+          (sum, order) => sum + Number(order.totalAmount || 0),
+          0,
+        );
+        const lastOrderDate = recentOrders[0]?.createdAt
+          ? new Date(recentOrders[0].createdAt).toLocaleString()
+          : "Sin compras";
+
+        const msg = `👤 Cliente: ${lookup.client.name || lookup.client.phone}\nTel: ${lookup.client.phone || "-"}\nEmail: ${lookup.client.email || "-"}\nEmpresa: ${lookup.client.company || "-"}\nDeuda: ${formatMoney(lookup.client.debt || 0)}\nÓrdenes recientes: ${recentOrders.length}\nMonto en últimas 10: ${formatMoney(totalSpent)}\nÚltima compra: ${lastOrderDate}`;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
       }
 
       case "LISTAR_PRODUCTOS": {
