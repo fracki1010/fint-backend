@@ -7,6 +7,7 @@ const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
 const User = require("../models/user.model");
 const { generateInvoicePdf } = require("../utils/invoicePdf");
+const { createAndDispatchNotification } = require("../services/notificationService");
 
 let cachedWhatsAppOwner = null;
 const MEMORY_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
@@ -17,6 +18,8 @@ const toPositiveNumber = (value) => {
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return parsed;
 };
+
+const normalizePhone = (value = "") => value.toString().trim();
 
 const getWhatsAppOwnerId = async () => {
   if (cachedWhatsAppOwner) return cachedWhatsAppOwner;
@@ -373,6 +376,26 @@ const formatOrderDraftMessage = (draft) => {
   return lines.join("\n");
 };
 
+const notifyTenantUsers = async (tenantId, payload) => {
+  try {
+    const users = await User.find({ tenant: tenantId, isActive: true })
+      .select("_id")
+      .lean();
+    if (!users.length) return;
+
+    await Promise.all(
+      users.map((user) =>
+        createAndDispatchNotification({
+          userId: user._id,
+          ...payload,
+        }),
+      ),
+    );
+  } catch (error) {
+    console.error("No se pudo despachar notificaciones de WhatsApp:", error);
+  }
+};
+
 const resolveOrderIdentifier = (order) => order.orderNumber || String(order._id);
 
 const buildOrderLineItemsText = (order) => {
@@ -672,20 +695,21 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             ${conversationContext}
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
             1. Crear producto: { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0 } }
-            2. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
-            3. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
-            4. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
-            5. Consultar stock: { "intent": "CONSULTAR_STOCK", "product": { "name": "..." } }
-            6. Reporte bajo stock: { "intent": "REPORTE_BAJO_STOCK" }
-            7. Listar productos: { "intent": "LISTAR_PRODUCTOS", "filters": { "lowStockOnly": false, "limit": 10 } }
-            8. Listar clientes: { "intent": "LISTAR_CLIENTES", "filters": { "top": 10 } }
-            9. Resumen ventas: { "intent": "RESUMEN_VENTAS", "period": "hoy|semana|mes" }
-            10. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
-            11. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
-            12. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
-            13. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
-            14. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
-            15. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
+            2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "taxId": "..." } }
+            3. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
+            4. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
+            5. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
+            6. Consultar stock: { "intent": "CONSULTAR_STOCK", "product": { "name": "..." } }
+            7. Reporte bajo stock: { "intent": "REPORTE_BAJO_STOCK" }
+            8. Listar productos: { "intent": "LISTAR_PRODUCTOS", "filters": { "lowStockOnly": false, "limit": 10 } }
+            9. Listar clientes: { "intent": "LISTAR_CLIENTES", "filters": { "top": 10 } }
+            10. Resumen ventas: { "intent": "RESUMEN_VENTAS", "period": "hoy|semana|mes" }
+            11. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
+            12. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
+            13. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
+            14. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
+            15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
+            16. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
             `;
 
       const jsonString = await processText(messageBody, routerPrompt);
@@ -783,13 +807,20 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
 
       if (
+        classification.intent === "CREAR_CLIENTE" ||
         classification.intent === "CREAR_PRODUCTO" ||
         classification.intent === "ENTRADA_STOCK" ||
         classification.intent === "MERMA_STOCK"
       ) {
         client.pendingAction = classification;
 
-        if (classification.intent === "CREAR_PRODUCTO") {
+        if (classification.intent === "CREAR_CLIENTE") {
+          const nextClient = classification.client || {};
+          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name || "sin nombre"}* con teléfono *${nextClient.phone || "-"}* y documento *${nextClient.taxId || "-"}*?\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        } else if (classification.intent === "CREAR_PRODUCTO") {
           const product = classification.product || {};
           const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name || "sin nombre"}* a $${product.price || 0} con ${product.stock || 0} de stock?\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
@@ -826,6 +857,57 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
     // --- EJECUCIÓN (Solo llega aquí si se acaba de confirmar o si es una charla/consulta) ---
     switch (classification.intent) {
+      case "CREAR_CLIENTE": {
+        const payload = classification.client || {};
+        const clientName = (payload.name || "").toString().trim();
+        const clientPhone = normalizePhone(payload.phone || "");
+        const clientTaxId = (payload.taxId || "").toString().trim();
+
+        if (!clientName || !clientPhone) {
+          const msg = "❌ Para crear el cliente necesito al menos nombre y teléfono.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const existingClient = await Client.findOne({
+          tenant: tenantId,
+          phone: clientPhone,
+        });
+
+        if (existingClient) {
+          const msg = `⚠️ Ya existe un cliente con ese teléfono: ${existingClient.name || existingClient.phone}`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const newClient = await Client.create({
+          tenant: tenantId,
+          name: clientName,
+          phone: clientPhone,
+          taxId: clientTaxId || "",
+          isActive: true,
+          deletedAt: null,
+        });
+
+        await notifyTenantUsers(tenantId, {
+          type: "success",
+          title: "Cliente creado desde WhatsApp",
+          message: `Se creó el cliente ${newClient.name || newClient.phone}.`,
+          metadata: {
+            source: "WhatsApp",
+            clientId: newClient._id,
+            phone: newClient.phone,
+          },
+        });
+
+        const msg = `✅ Cliente creado: ${newClient.name} · ${newClient.phone}`;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
       case "CREAR_PRODUCTO": {
         const { name, price, stock } = classification.product || {};
         const productName = (name || "").toString().trim().toLowerCase();
@@ -878,7 +960,21 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           await session.commitTransaction();
           session.endSession();
 
-          return `✅ Guardado: *${producto.name}* ($${producto.price}). Stock actual: ${producto.stock}`;
+          await notifyTenantUsers(tenantId, {
+            type: "success",
+            title: "Producto actualizado desde WhatsApp",
+            message: `${producto.name} quedó con stock ${producto.stock}.`,
+            metadata: {
+              source: "WhatsApp",
+              productId: producto._id,
+              stock: producto.stock,
+            },
+          });
+
+          const msg = `✅ Guardado: *${producto.name}* ($${producto.price}). Stock actual: ${producto.stock}`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } catch (error) {
           await session.abortTransaction();
           session.endSession();
@@ -1040,6 +1136,20 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             }
           }
 
+          await notifyTenantUsers(tenantId, {
+            type: "success",
+            title: "Venta creada desde WhatsApp",
+            message: `Se registró la venta ${resolveOrderIdentifier(newOrder)} por ${formatMoney(
+              totalAmount,
+            )}.`,
+            metadata: {
+              source: "WhatsApp",
+              orderId: newOrder._id,
+              orderNumber: newOrder.orderNumber || null,
+              totalAmount,
+            },
+          });
+
           appendConversationEntry(client, "assistant", resp.trim());
           await client.save();
           return resp;
@@ -1110,7 +1220,21 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
           await session.commitTransaction();
           session.endSession();
-          return `✅ Stock actualizado: *${productoDB.name}* tiene ahora ${productoDB.stock} unidades.`;
+          await notifyTenantUsers(tenantId, {
+            type: "info",
+            title: "Ingreso de stock desde WhatsApp",
+            message: `${productoDB.name}: +${qty} (${reason || "Entrada manual de stock"}).`,
+            metadata: {
+              source: "WhatsApp",
+              productId: productoDB._id,
+              movementType: "ENTRADA",
+              quantity: qty,
+            },
+          });
+          const msg = `✅ Stock actualizado: *${productoDB.name}* tiene ahora ${productoDB.stock} unidades.`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } catch (error) {
           await session.abortTransaction();
           session.endSession();
@@ -1184,7 +1308,21 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
           await session.commitTransaction();
           session.endSession();
-          return `✅ Baja registrada: *${productoDB.name}* bajo a ${productoDB.stock} unidades.`;
+          await notifyTenantUsers(tenantId, {
+            type: "warning",
+            title: "Merma registrada desde WhatsApp",
+            message: `${productoDB.name}: -${qty} (${reason || "Reporte de merma/perdida"}).`,
+            metadata: {
+              source: "WhatsApp",
+              productId: productoDB._id,
+              movementType: "MERMA",
+              quantity: qty,
+            },
+          });
+          const msg = `✅ Baja registrada: *${productoDB.name}* bajo a ${productoDB.stock} unidades.`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
         } catch (error) {
           await session.abortTransaction();
           session.endSession();
