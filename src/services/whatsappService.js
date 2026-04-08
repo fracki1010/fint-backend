@@ -1,4 +1,4 @@
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
@@ -165,7 +165,21 @@ const bindWhatsAppEvents = (instance) => {
         const iaResponse = await handleIncomingMessage(
           message.from,
           messageText,
-          { tenantId: senderAccess.tenantId },
+          {
+            tenantId: senderAccess.tenantId,
+            sendInvoicePdf: async ({ pdfPath, caption }) => {
+              const media = MessageMedia.fromFilePath(pdfPath);
+              try {
+                await instance.sendMessage(message.from, media, {
+                  caption: caption || "Factura PDF",
+                });
+              } finally {
+                if (pdfPath && fs.existsSync(pdfPath)) {
+                  fs.unlinkSync(pdfPath);
+                }
+              }
+            },
+          },
         );
         await instance.sendMessage(message.from, iaResponse);
       }

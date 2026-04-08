@@ -3,8 +3,10 @@ const { processText } = require("../services/groqService");
 const Client = require("../models/client.model");
 const { Product } = require("../models/product.model");
 const Order = require("../models/order.model");
+const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
 const User = require("../models/user.model");
+const { generateInvoicePdf } = require("../utils/invoicePdf");
 
 let cachedWhatsAppOwner = null;
 const MEMORY_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
@@ -371,6 +373,65 @@ const formatOrderDraftMessage = (draft) => {
   return lines.join("\n");
 };
 
+const resolveOrderIdentifier = (order) => order.orderNumber || String(order._id);
+
+const buildOrderLineItemsText = (order) => {
+  if (!Array.isArray(order.items) || order.items.length === 0) return "   - (sin items)";
+  return order.items
+    .map((item) => {
+      const qty = Number(item.quantity || 0);
+      const price = Number(item.price || 0);
+      const subtotal = qty * price;
+      return `   - ${item.product} · ${qty} x ${formatMoney(price)} = ${formatMoney(subtotal)}`;
+    })
+    .join("\n");
+};
+
+const buildInvoiceSuggestionMessage = (order) => {
+  const orderRef = resolveOrderIdentifier(order);
+  const appUrl = process.env.APP_WEB_URL || process.env.FRONTEND_URL || "";
+  const salesLink = appUrl ? `${appUrl.replace(/\/+$/, "")}/sales` : null;
+  return [
+    "🧾 Factura sugerida:",
+    `- Venta: ${orderRef}`,
+    "- Puedes generar/enviar factura desde Ventas buscando ese número.",
+    salesLink ? `🔗 ${salesLink}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const buildClientSalesDetailsMessage = (clientData, orders = []) => {
+  const lines = [
+    `👤 Cliente: ${clientData.name || clientData.phone}`,
+    `📞 Tel: ${clientData.phone || "-"}`,
+    `🧾 Ventas encontradas: ${orders.length}`,
+  ];
+
+  if (orders.length === 0) {
+    lines.push("No hay ventas registradas para este cliente.");
+    return lines.join("\n");
+  }
+
+  orders.forEach((order, index) => {
+    const dateLabel = order.createdAt
+      ? new Date(order.createdAt).toLocaleString()
+      : "sin fecha";
+    lines.push(`\n🔹 Venta ${index + 1}`);
+    lines.push(`🧩 Nro: ${resolveOrderIdentifier(order)}`);
+    lines.push(`📅 Fecha: ${dateLabel}`);
+    lines.push(`💰 Total: ${formatMoney(order.totalAmount)}`);
+    lines.push(
+      `📌 Estado: ${order.salesStatus || "-"} / ${order.paymentStatus || "-"} / ${order.deliveryStatus || "-"}`,
+    );
+    lines.push("🛍️ Items:");
+    lines.push(buildOrderLineItemsText(order));
+  });
+
+  lines.push("\n👉 Si quieres factura, responde: factura 1, factura 2, etc.");
+  return lines.join("\n");
+};
+
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
     const owner = options.tenantId ? null : await getWhatsAppOwnerId();
@@ -467,6 +528,45 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           return msg;
         }
 
+        if (classification.intent === "DETALLE_VENTAS_CLIENTE") {
+          const { client: matchedClient } = await findClientByName(
+            tenantId,
+            classification.client?.name || selectedName,
+          );
+          if (!matchedClient) {
+            const msg = "No pude encontrar ese cliente para mostrar ventas.";
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          const limit = Math.min(
+            Math.max(Number(client.pendingSuggestion?.limit) || 5, 1),
+            15,
+          );
+          const orders = await Order.find({
+            tenant: tenantId,
+            client: matchedClient._id,
+          })
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
+
+          const msg = buildClientSalesDetailsMessage(matchedClient, orders);
+          client.pendingSuggestion =
+            orders.length > 0
+              ? {
+                  intent: "FACTURA_VENTA",
+                  kind: "order",
+                  options: orders.map((order) => resolveOrderIdentifier(order)),
+                  createdAt: new Date().toISOString(),
+                }
+              : null;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
         if (classification.intent === "NUEVO_PEDIDO") {
           const orderWithSelectedClient = {
             ...(client.pendingSuggestion.order || {}),
@@ -495,8 +595,31 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           await client.save();
           return msg;
         }
+
+        if (classification.intent === "FACTURA_VENTA") {
+          const selectedOrderRef = selectedName;
+          const byOrderNumber = await Order.findOne({
+            tenant: tenantId,
+            orderNumber: selectedOrderRef,
+          }).lean();
+          const byId = mongoose.Types.ObjectId.isValid(selectedOrderRef)
+            ? await Order.findOne({ tenant: tenantId, _id: selectedOrderRef }).lean()
+            : null;
+          const order = byOrderNumber || byId;
+          if (!order) {
+            const msg = "No encontré esa venta para sugerir la factura.";
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          const msg = buildInvoiceSuggestionMessage(order);
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
       } else {
-        const msg = `No te entendí. Responde con el número de la opción o con el nombre del producto.\n${client.pendingSuggestion.options
+        const msg = `No te entendí. Responde con el número de la opción o con el texto de la opción.\n${client.pendingSuggestion.options
           .map((name, index) => `${index + 1}. ${name}`)
           .join("\n")}`;
         appendConversationEntry(client, "assistant", msg);
@@ -560,7 +683,9 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             10. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
             11. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
             12. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
-            13. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
+            13. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
+            14. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
+            15. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
             `;
 
       const jsonString = await processText(messageBody, routerPrompt);
@@ -884,6 +1009,37 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           if (noEncontrados.length > 0) {
             resp += `⚠️ Faltó: ${noEncontrados.join(", ")}`;
           }
+
+          if (typeof options.sendInvoicePdf === "function") {
+            try {
+              const [clientData, storeData] = await Promise.all([
+                Client.findOne({ _id: draft.clientId, tenant: tenantId }).lean(),
+                Setting.findOne({ tenant: tenantId })
+                  .select("storeName taxId phone email")
+                  .lean(),
+              ]);
+
+              const pdfPath = await generateInvoicePdf({
+                order: {
+                  ...newOrder.toObject(),
+                  items: itemsParaGuardar,
+                  totalAmount,
+                },
+                client: clientData || {},
+                store: storeData || {},
+              });
+
+              await options.sendInvoicePdf({
+                pdfPath,
+                caption: `Factura ${resolveOrderIdentifier(newOrder)} · Total ${formatMoney(totalAmount)}`,
+              });
+              resp += "\n🧾 Factura PDF enviada.";
+            } catch (invoiceError) {
+              console.error("No se pudo enviar la factura PDF:", invoiceError);
+              resp += "\n⚠️ La venta se guardó, pero no pude enviar la factura PDF.";
+            }
+          }
+
           appendConversationEntry(client, "assistant", resp.trim());
           await client.save();
           return resp;
@@ -1142,6 +1298,95 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         return msg;
       }
 
+      case "DETALLE_VENTAS_CLIENTE": {
+        const requestedName = (classification?.client?.name || "").toString().trim();
+        const limit = Math.min(Math.max(Number(classification?.limit) || 5, 1), 15);
+        if (!requestedName) {
+          const msg =
+            "Indícame el cliente para mostrar ventas. Ejemplo: 'detalle ventas de Juan Perez'.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const lookup = await findClientByName(tenantId, requestedName);
+        if (!lookup.client) {
+          if (lookup.suggestions?.length) {
+            client.pendingSuggestion = {
+              intent: "DETALLE_VENTAS_CLIENTE",
+              kind: "client",
+              client: { name: requestedName },
+              limit,
+              options: lookup.suggestions,
+              createdAt: new Date().toISOString(),
+            };
+            const msg = formatNumberedSuggestions(requestedName, lookup.suggestions);
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+          const msg = `No encontré al cliente "${requestedName}".`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const orders = await Order.find({
+          tenant: tenantId,
+          client: lookup.client._id,
+        })
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean();
+
+        const msg = buildClientSalesDetailsMessage(lookup.client, orders);
+        client.pendingSuggestion =
+          orders.length > 0
+            ? {
+                intent: "FACTURA_VENTA",
+                kind: "order",
+                options: orders.map((order) => resolveOrderIdentifier(order)),
+                createdAt: new Date().toISOString(),
+              }
+            : null;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
+      case "FACTURA_VENTA": {
+        const requestedOrderRef = (classification?.order?.orderNumber || "").toString().trim();
+        if (!requestedOrderRef) {
+          const msg =
+            "Indícame el número de venta. Ejemplo: 'factura VTA-000123' o pide detalle de ventas del cliente.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const order = await Order.findOne({
+          tenant: tenantId,
+          $or: [
+            { orderNumber: requestedOrderRef },
+            ...(mongoose.Types.ObjectId.isValid(requestedOrderRef)
+              ? [{ _id: requestedOrderRef }]
+              : []),
+          ],
+        }).lean();
+
+        if (!order) {
+          const msg = `No encontré la venta "${requestedOrderRef}".`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const msg = buildInvoiceSuggestionMessage(order);
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
       case "LISTAR_PRODUCTOS": {
         const onlyLowStock = Boolean(classification?.filters?.lowStockOnly);
         const limit = Math.min(
@@ -1168,11 +1413,16 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             : "No hay productos cargados.";
         }
 
-        let message = onlyLowStock ? "⚠️ Bajo stock:\n" : "📦 Productos:\n";
+        let message = onlyLowStock
+          ? `⚠️ *Bajo stock* (${products.length}):\n`
+          : `📦 *Productos* (${products.length}):\n`;
         for (const product of products) {
-          message += `- ${product.name}: ${product.stock} ${product.unitOfMeasure || "un"} · ${formatMoney(product.price)}\n`;
+          message += `🔹 ${product.name}\n   📊 Stock: ${product.stock} ${product.unitOfMeasure || "un"}\n   💵 Precio: ${formatMoney(product.price)}\n`;
         }
-        return message.trim();
+        const response = message.trim();
+        appendConversationEntry(client, "assistant", response);
+        await client.save();
+        return response;
       }
 
       case "LISTAR_CLIENTES": {
@@ -1187,12 +1437,15 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
         if (clients.length === 0) return "No hay clientes registrados.";
 
-        let message = "👥 Clientes recientes:\n";
+        let message = `👥 *Clientes recientes* (${clients.length}):\n`;
         for (const clientItem of clients) {
           const label = clientItem.name || clientItem.phone;
-          message += `- ${label}${clientItem.phone ? ` · ${clientItem.phone}` : ""}\n`;
+          message += `🔹 ${label}${clientItem.phone ? ` · ${clientItem.phone}` : ""}\n`;
         }
-        return message.trim();
+        const response = message.trim();
+        appendConversationEntry(client, "assistant", response);
+        await client.save();
+        return response;
       }
 
       case "RESUMEN_VENTAS": {
@@ -1218,7 +1471,10 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
         const revenue = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
         const avgTicket = revenue / orders.length;
-        return `📈 Ventas (${period}):\n- Operaciones: ${orders.length}\n- Facturación: ${formatMoney(revenue)}\n- Ticket promedio: ${formatMoney(avgTicket)}`;
+        const response = `📈 *Resumen de ventas (${period})*\n🔹 Operaciones: ${orders.length}\n🔹 Facturación: ${formatMoney(revenue)}\n🔹 Ticket promedio: ${formatMoney(avgTicket)}`;
+        appendConversationEntry(client, "assistant", response);
+        await client.save();
+        return response;
       }
 
       case "METRICAS_NEGOCIO": {
@@ -1261,7 +1517,10 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
               ? 100
               : 0;
 
-        return `📊 Métricas del negocio:\n- Ventas del mes: ${currentMonthOrders.length}\n- Facturación del mes: ${formatMoney(currentRevenue)}\n- Variación vs mes anterior: ${growth.toFixed(1)}%\n- Productos en bajo stock: ${lowStockCount}\n- Clientes activos: ${activeClients}`;
+        const response = `📊 *Métricas del negocio*\n🔹 Ventas del mes: ${currentMonthOrders.length}\n🔹 Facturación del mes: ${formatMoney(currentRevenue)}\n🔹 Variación vs mes anterior: ${growth.toFixed(1)}%\n🔹 Productos en bajo stock: ${lowStockCount}\n🔹 Clientes activos: ${activeClients}`;
+        appendConversationEntry(client, "assistant", response);
+        await client.save();
+        return response;
       }
 
       case "RECOMENDAR_REPOSICION": {
@@ -1329,12 +1588,15 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           return "✅ Tu reposición viene bien. No veo urgencias para los próximos 10 días.";
         }
 
-        let message = "🧠 Reposición recomendada:\n";
+        let message = "🧠 *Reposición recomendada*:\n";
         for (const item of recommendations) {
-          message += `- ${item.name}: stock ${item.stock} ${item.unit}, cobertura ~${item.coverDays.toFixed(1)} días\n`;
+          message += `🔹 ${item.name}\n   📦 Stock: ${item.stock} ${item.unit}\n   ⏱️ Cobertura: ~${item.coverDays.toFixed(1)} días\n`;
         }
         message += "Sugerencia: prioriza primero los de menor cobertura.";
-        return message.trim();
+        const response = message.trim();
+        appendConversationEntry(client, "assistant", response);
+        await client.save();
+        return response;
       }
 
       case "CHARLA_GENERAL":
