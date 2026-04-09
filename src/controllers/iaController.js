@@ -86,6 +86,9 @@ const validateProductDraft = (rawProduct = {}) => {
     costPrice: parseNumberOrNull(
       payload.costPrice !== undefined ? payload.costPrice : payload.cost,
     ),
+    category: (payload.category || "").toString().trim(),
+    description: (payload.description || "").toString().trim(),
+    minStock: parseNumberOrNull(payload.minStock),
   };
 
   const missing = [];
@@ -94,12 +97,17 @@ const validateProductDraft = (rawProduct = {}) => {
   if (normalized.stock === null) missing.push("stock");
   if (!normalized.unitOfMeasure) missing.push("unidad");
   if (normalized.costPrice === null) missing.push("costo");
+  if (!normalized.category) missing.push("categoria");
+  if (!normalized.description) missing.push("descripcion");
+  if (normalized.minStock === null) missing.push("stock minimo");
 
   const invalid = [];
   if (normalized.price !== null && normalized.price < 0) invalid.push("precio no puede ser negativo");
   if (normalized.stock !== null && normalized.stock < 0) invalid.push("stock no puede ser negativo");
   if (normalized.costPrice !== null && normalized.costPrice < 0)
     invalid.push("costo no puede ser negativo");
+  if (normalized.minStock !== null && normalized.minStock < 0)
+    invalid.push("stock minimo no puede ser negativo");
 
   return { normalized, missing, invalid };
 };
@@ -136,6 +144,20 @@ const mergeProductDraft = (baseDraft = {}, incoming = {}) => {
         : next.cost !== undefined && next.cost !== null && next.cost !== ""
           ? next.cost
           : current.costPrice,
+    category:
+      next.category !== undefined && next.category !== null && next.category !== ""
+        ? next.category
+        : current.category,
+    description:
+      next.description !== undefined &&
+      next.description !== null &&
+      next.description !== ""
+        ? next.description
+        : current.description,
+    minStock:
+      next.minStock !== undefined && next.minStock !== null && next.minStock !== ""
+        ? next.minStock
+        : current.minStock,
   };
 };
 
@@ -149,7 +171,10 @@ JSON esperado:
   "price": number opcional,
   "stock": number opcional,
   "unitOfMeasure": "unidad|caja|paquete|bolsa|botella|kg|g|litro|ml|metro opcional",
-  "costPrice": number opcional
+  "costPrice": number opcional,
+  "category": "string opcional",
+  "description": "string opcional",
+  "minStock": number opcional
 }
 Si un campo no aparece, omítelo.`;
 
@@ -257,6 +282,27 @@ const findProductByName = async (tenantId, rawName, session = null) => {
     .map((item) => item.name);
 
   return { product: null, suggestions };
+};
+
+const getTenantCategories = async (tenantId) => {
+  const products = await Product.find({
+    tenant: tenantId,
+    isActive: { $ne: false },
+    category: { $exists: true, $ne: null, $ne: "" },
+  })
+    .select("category")
+    .limit(200)
+    .lean();
+
+  const categories = [
+    ...new Set(
+      products
+        .map((item) => (item.category || "").toString().trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  return categories.slice(0, 12);
 };
 
 const findClientByName = async (tenantId, rawName) => {
@@ -560,6 +606,12 @@ const buildInvoiceSuggestionMessage = (order) => {
     .join("\n");
 };
 
+const generateWhatsAppSku = () => {
+  const random = Math.floor(1000 + Math.random() * 9000);
+  const stamp = Date.now().toString().slice(-6);
+  return `WA-${stamp}${random}`;
+};
+
 const buildClientSalesDetailsMessage = (clientData, orders = []) => {
   const lines = [
     `👤 Cliente: ${clientData.name || clientData.phone}`,
@@ -803,6 +855,12 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             currentDraft.costPrice !== undefined && currentDraft.costPrice !== null
               ? currentDraft.costPrice
               : 0,
+          category: currentDraft.category || "General",
+          description: currentDraft.description || "Sin descripcion",
+          minStock:
+            currentDraft.minStock !== undefined && currentDraft.minStock !== null
+              ? currentDraft.minStock
+              : 0,
         };
       } else {
         const extracted = await extractProductFieldsFromMessage(
@@ -826,7 +884,12 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           validation.invalid.length > 0
             ? `Datos inválidos: ${validation.invalid.join(", ")}.`
             : "";
-        const msg = `Vamos completando el producto.\n${missingText}\n${invalidText}\nPuedes enviarme solo lo que falta o responder "completa así" para usar unidad=unidad y costo=0 cuando aplique.`;
+        const categories = await getTenantCategories(tenantId);
+        const categoriesText =
+          validation.missing.includes("categoria") && categories.length > 0
+            ? `Categorias existentes: ${categories.join(", ")}. Puedes usar una o decir "nueva categoria <nombre>".`
+            : "";
+        const msg = `Vamos completando el producto.\n${missingText}\n${invalidText}\n${categoriesText}\nPuedes enviarme solo lo que falta o responder "completa así" para usar defaults (unidad=unidad, costo=0, categoria=General, descripcion=Sin descripcion, stock minimo=0).`;
         appendConversationEntry(client, "assistant", msg);
         await client.save();
         return msg;
@@ -837,7 +900,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         product: validation.normalized,
       };
       const p = validation.normalized;
-      const msg = `⚠️ Confirma:\n¿Guardo el producto *${p.name}*?\n💵 Precio: ${formatMoney(p.price)}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📐 Unidad: ${p.unitOfMeasure}\n(Sí/No)`;
+      const msg = `⚠️ Confirma:\n¿Guardo el producto *${p.name}*?\n💵 Precio: ${formatMoney(p.price)}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📉 Stock mínimo: ${p.minStock}\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${p.description}\n(Sí/No)`;
       appendConversationEntry(client, "assistant", msg);
       await client.save();
       return msg;
@@ -845,6 +908,118 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
 
     // --- REGLA 3: ¿HAY UNA ACCIÓN ESPERANDO CONFIRMACIÓN? ---
     if (client.pendingAction) {
+      if (client.pendingAction.intent === "CREAR_PRODUCTO") {
+        const editPrompt = `Analiza la respuesta del usuario respecto a esta confirmación de creación de producto:
+Producto: ${JSON.stringify(client.pendingAction.product || {})}
+Respuesta: "${messageBody}"
+Responde SOLO JSON:
+{
+  "action": "CONFIRMAR" | "CANCELAR" | "MODIFICAR" | "INDECISO",
+  "product": {
+    "name": "... opcional",
+    "price": 0,
+    "stock": 0,
+    "unitOfMeasure": "...",
+    "costPrice": 0,
+    "category": "...",
+    "description": "...",
+    "minStock": 0
+  }
+}
+Si no hay cambios, omite "product".`;
+
+        const editRaw = await processText(editPrompt);
+        const editData = safeJsonParse(editRaw) || { action: "INDECISO" };
+        if (editData.action === "INDECISO") {
+          const fallbackFields = await extractProductFieldsFromMessage(
+            messageBody,
+            client.pendingAction.product || {},
+          );
+          if (fallbackFields && Object.keys(fallbackFields).length > 0) {
+            editData.action = "MODIFICAR";
+            editData.product = fallbackFields;
+          }
+        }
+
+        if (editData.action === "CANCELAR") {
+          if (editData.product && Object.keys(editData.product).length > 0) {
+            const merged = mergeProductDraft(client.pendingAction.product || {}, editData.product);
+            const validation = validateProductDraft(merged);
+            if (validation.missing.length > 0 || validation.invalid.length > 0) {
+              client.pendingAction = {
+                intent: "CREAR_PRODUCTO_COMPLETION",
+                product: merged,
+              };
+              const msg = `Perfecto, no lo creo todavía. Ajustemos primero:\n${
+                validation.missing.length ? `Falta: ${validation.missing.join(", ")}.\n` : ""
+              }${
+                validation.invalid.length ? `Datos inválidos: ${validation.invalid.join(", ")}.` : ""
+              }`;
+              appendConversationEntry(client, "assistant", msg);
+              await client.save();
+              return msg;
+            }
+
+            client.pendingAction = {
+              intent: "CREAR_PRODUCTO",
+              product: validation.normalized,
+            };
+            const p = validation.normalized;
+            const msg = `Perfecto, actualizado ✅\n¿Lo creo ahora así?\n💵 Precio: ${formatMoney(
+              p.price,
+            )}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📉 Stock mínimo: ${
+              p.minStock
+            }\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${
+              p.description
+            }\n(Sí/No)`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          client.pendingAction = null;
+          const msg = "❌ Acción cancelada.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        if (editData.action === "MODIFICAR") {
+          const merged = mergeProductDraft(client.pendingAction.product || {}, editData.product || {});
+          const validation = validateProductDraft(merged);
+          if (validation.missing.length > 0 || validation.invalid.length > 0) {
+            client.pendingAction = {
+              intent: "CREAR_PRODUCTO_COMPLETION",
+              product: merged,
+            };
+            const msg = `Listo, aplico cambios. Aún falta:\n${
+              validation.missing.length ? `- ${validation.missing.join(", ")}` : ""
+            }${
+              validation.invalid.length ? `\n- ${validation.invalid.join(", ")}` : ""
+            }`;
+            appendConversationEntry(client, "assistant", msg);
+            await client.save();
+            return msg;
+          }
+
+          client.pendingAction = {
+            intent: "CREAR_PRODUCTO",
+            product: validation.normalized,
+          };
+          const p = validation.normalized;
+          const msg = `Perfecto, quedó actualizado ✅\n¿Lo creo así?\n💵 Precio: ${formatMoney(
+            p.price,
+          )}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📉 Stock mínimo: ${
+            p.minStock
+          }\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${
+            p.description
+          }\n(Sí/No)`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+      }
+
       // Usamos a Llama para entender si el usuario dijo "sí", "obvio", "dale" o si canceló
       const confirmPrompt = `El usuario debe confirmar esto: ${JSON.stringify(client.pendingAction)}.
             Su respuesta fue: "${messageBody}".
@@ -883,7 +1058,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             Contexto de conversación reciente (últimos 5 días):
             ${conversationContext}
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
-            1. Crear producto (siempre completo): { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0, "unitOfMeasure": "unidad|caja|kg|litro|...", "costPrice": 0 } }
+            1. Crear producto (siempre completo): { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0, "unitOfMeasure": "unidad|caja|kg|litro|...", "costPrice": 0, "category": "...", "description": "...", "minStock": 0 } }
             2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "taxId": "..." } }
             3. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
             4. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
@@ -1034,7 +1209,12 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
               intent: "CREAR_PRODUCTO_COMPLETION",
               product: mergeProductDraft({}, classification.product || {}),
             };
-            const msg = `Para crear producto necesito todos los datos obligatorios.\n${missingText}\n${invalidText}\nEnvíame solo lo que falta (por ejemplo: "unidad paquete, costo 900"), o responde "completa así" y completo con unidad=unidad y costo=0 si faltan esos campos.`;
+            const categories = await getTenantCategories(tenantId);
+            const categoriesText =
+              categories.length > 0
+                ? `Categorías disponibles: ${categories.join(", ")}. También puedes decir "nueva categoría <nombre>".`
+                : "Aún no hay categorías cargadas. Puedes definir una nueva.";
+            const msg = `Para crear producto necesito todos los datos obligatorios.\n${missingText}\n${invalidText}\n${categoriesText}\nEnvíame solo lo que falta (ej: "unidad paquete, costo 900, stock mínimo 5, descripción Yerba premium").\nSi prefieres, responde "completa así" y uso defaults para faltantes opcionales de negocio.`;
             appendConversationEntry(client, "assistant", msg);
             await client.save();
             return msg;
@@ -1045,7 +1225,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             product: validation.normalized,
           };
           const product = validation.normalized;
-          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name}*?\n💵 Precio: ${formatMoney(product.price)}\n💰 Costo: ${formatMoney(product.costPrice)}\n📦 Stock: ${product.stock}\n📐 Unidad: ${product.unitOfMeasure}\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name}*?\n💵 Precio: ${formatMoney(product.price)}\n💰 Costo: ${formatMoney(product.costPrice)}\n📦 Stock: ${product.stock}\n📉 Stock mínimo: ${product.minStock}\n📐 Unidad: ${product.unitOfMeasure}\n🏷️ Categoría: ${product.category}\n📝 Descripción: ${product.description}\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1137,7 +1317,16 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           return msg;
         }
 
-        const { name, price, stock, unitOfMeasure, costPrice } = validation.normalized;
+        const {
+          name,
+          price,
+          stock,
+          unitOfMeasure,
+          costPrice,
+          category,
+          description,
+          minStock,
+        } = validation.normalized;
         const productName = (name || "").toString().trim().toLowerCase();
         const stockDelta = Number(stock);
         const safePrice = Number(price);
@@ -1159,17 +1348,52 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           }).session(session);
           const stockBefore = existingProduct ? existingProduct.stock : 0;
 
-          const producto = await Product.findOneAndUpdate(
-            { tenant: tenantId, name: productName },
-            {
+          let producto = existingProduct;
+          if (producto) {
+            producto.price = safePrice;
+            producto.costPrice = safeCostPrice;
+            producto.unitOfMeasure = unitOfMeasure;
+            producto.category = category;
+            producto.categories = category ? [category] : [];
+            producto.description = description;
+            producto.minStock = Number(minStock || 0);
+            producto.stock = Number(producto.stock || 0) + stockDelta;
+            if (producto.sku === null || producto.sku === "") {
+              producto.set("sku", undefined);
+            }
+            await producto.save({ session });
+          } else {
+            producto = new Product({
               tenant: tenantId,
+              name: productName,
               price: safePrice,
               costPrice: safeCostPrice,
               unitOfMeasure,
-              $inc: { stock: stockDelta },
-            },
-            { returnDocument: "after", upsert: true, session },
-          );
+              category,
+              categories: category ? [category] : [],
+              description,
+              minStock: Number(minStock || 0),
+              stock: stockDelta,
+              sku: generateWhatsAppSku(),
+            });
+            if (producto.sku === null || producto.sku === "") {
+              producto.set("sku", undefined);
+            }
+            try {
+              await producto.save({ session });
+            } catch (saveError) {
+              if (
+                saveError?.code === 11000 &&
+                saveError?.keyPattern?.tenant === 1 &&
+                saveError?.keyPattern?.sku === 1
+              ) {
+                producto.sku = generateWhatsAppSku();
+                await producto.save({ session });
+              } else {
+                throw saveError;
+              }
+            }
+          }
 
           if (stockDelta > 0) {
             await StockMovement.create(
@@ -1205,13 +1429,20 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             },
           });
 
-          const msg = `✅ Guardado: *${producto.name}* ($${producto.price}). Stock actual: ${producto.stock}`;
+          const msg = `✅ Guardado: *${producto.name}* ($${producto.price}). Stock actual: ${producto.stock}\n🏷️ SKU: ${producto.sku || "-"}`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
         } catch (error) {
           await session.abortTransaction();
           session.endSession();
+          if (
+            error?.code === 11000 &&
+            error?.keyPattern?.tenant === 1 &&
+            error?.keyPattern?.sku === 1
+          ) {
+            return "❌ No pude guardar el producto por un conflicto de SKU vacío. Ya corregí el flujo para evitarlo; intenta nuevamente.";
+          }
           throw error;
         }
       }
