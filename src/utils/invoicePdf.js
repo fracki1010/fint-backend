@@ -13,11 +13,11 @@ const formatMoney = (value) => `$${Number(value || 0).toFixed(2)}`;
 const buildInvoiceFileName = (order = {}) => {
   const ref = (order.orderNumber || order._id || Date.now()).toString();
   const safeRef = ref.replace(/[^a-zA-Z0-9_-]/g, "");
-  return `invoice-${safeRef}-${Date.now()}.pdf`;
+  return `factura-venta-${safeRef}-${Date.now()}.pdf`;
 };
 
 const generateInvoicePdf = async ({ order = {}, client = {}, store = {} }) => {
-  const invoicesDir = path.join(__dirname, "../../temp/invoices");
+  const invoicesDir = path.join(__dirname, "../../facturas_de_ventas");
   ensureDir(invoicesDir);
   const filePath = path.join(invoicesDir, buildInvoiceFileName(order));
 

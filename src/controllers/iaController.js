@@ -280,6 +280,22 @@ Si un campo no aparece, omítelo.`;
   return safeJsonParse(response) || {};
 };
 
+const extractClientFieldsFromMessage = async (messageBody, currentDraft = {}) => {
+  const prompt = `Extrae SOLO datos de cliente desde el mensaje y responde JSON puro.
+Mensaje usuario: "${messageBody}"
+Borrador actual: ${JSON.stringify(currentDraft)}
+JSON esperado:
+{
+  "name": "string opcional",
+  "phone": "string opcional",
+  "taxId": "string opcional"
+}
+Si un campo no aparece, omítelo.`;
+
+  const response = await processText(prompt);
+  return safeJsonParse(response) || {};
+};
+
 const getWhatsAppOwnerId = async () => {
   if (cachedWhatsAppOwner) return cachedWhatsAppOwner;
 
@@ -704,6 +720,35 @@ const buildInvoiceSuggestionMessage = (order) => {
     .join("\n");
 };
 
+const sendInvoicePdfForOrder = async ({ order, tenantId, options = {} }) => {
+  if (typeof options.sendInvoicePdf !== "function") {
+    return { sent: false, reason: "missing_sender" };
+  }
+
+  const orderPayload =
+    typeof order?.toObject === "function" ? order.toObject() : { ...(order || {}) };
+
+  const [clientData, storeData] = await Promise.all([
+    orderPayload.client
+      ? Client.findOne({ _id: orderPayload.client, tenant: tenantId }).lean()
+      : null,
+    Setting.findOne({ tenant: tenantId }).select("storeName taxId phone email").lean(),
+  ]);
+
+  const pdfPath = await generateInvoicePdf({
+    order: orderPayload,
+    client: clientData || {},
+    store: storeData || {},
+  });
+
+  await options.sendInvoicePdf({
+    pdfPath,
+    caption: `Factura ${resolveOrderIdentifier(orderPayload)} · Total ${formatMoney(orderPayload.totalAmount)}`,
+  });
+
+  return { sent: true };
+};
+
 const generateWhatsAppSku = () => {
   const random = Math.floor(1000 + Math.random() * 9000);
   const stamp = Date.now().toString().slice(-6);
@@ -955,8 +1000,27 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         client.pendingAction.currentField ||
         getNextMissingField(validateClientDraft(draft).missing, CLIENT_FIELD_ORDER);
 
-      const value = extractClientFieldValue(currentField, messageBody);
-      if (value === null || value === "") {
+      const extractedFields = await extractClientFieldsFromMessage(messageBody, draft);
+      let merged = { ...draft, ...(extractedFields || {}) };
+
+      const currentFieldValue = extractClientFieldValue(currentField, messageBody);
+      if (
+        (currentFieldValue !== null && currentFieldValue !== "") ||
+        merged[currentField] === undefined ||
+        merged[currentField] === null ||
+        merged[currentField] === ""
+      ) {
+        merged[currentField] =
+          currentFieldValue !== null && currentFieldValue !== ""
+            ? currentFieldValue
+            : merged[currentField];
+      }
+
+      if (
+        merged[currentField] === undefined ||
+        merged[currentField] === null ||
+        merged[currentField] === ""
+      ) {
         const ask = buildClientFieldQuestion(currentField);
         const msg = `No llegué a tomar ese dato.\n${ask}`;
         appendConversationEntry(client, "assistant", msg);
@@ -964,7 +1028,6 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         return msg;
       }
 
-      const merged = { ...draft, [currentField]: value };
       const validation = validateClientDraft(merged);
       if (validation.missing.length > 0) {
         const nextField = getNextMissingField(validation.missing, CLIENT_FIELD_ORDER);
@@ -985,7 +1048,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         client: validation.normalized,
       };
       const c = validation.normalized;
-      const msg = `⚠️ Confirma:\n¿Creo el cliente *${c.name}* con teléfono *${c.phone}* y documento *${c.taxId}*?\n(Sí/No)`;
+      const msg = `⚠️ Confirma:\n¿Creo el cliente *${c.name}* con teléfono *${c.phone}* y documento *${c.taxId}*?\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
       appendConversationEntry(client, "assistant", msg);
       await client.save();
       return msg;
@@ -1014,6 +1077,9 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
               : 0,
         };
       } else {
+        const extractedFields = await extractProductFieldsFromMessage(messageBody, currentDraft);
+        mergedDraft = mergeProductDraft(currentDraft, extractedFields || {});
+
         const currentField =
           client.pendingAction.currentField ||
           getNextMissingField(
@@ -1022,17 +1088,23 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           );
 
         const fieldValue = extractProductFieldValue(currentField, messageBody);
-        if (fieldValue === null || fieldValue === "") {
+        if (fieldValue !== null && fieldValue !== "") {
+          mergedDraft = mergeProductDraft(mergedDraft, {
+            [currentField]: fieldValue,
+          });
+        }
+
+        if (
+          mergedDraft[currentField] === undefined ||
+          mergedDraft[currentField] === null ||
+          mergedDraft[currentField] === ""
+        ) {
           const ask = await buildProductFieldQuestion(currentField, tenantId);
           const msg = `No llegué a tomar ese dato.\n${ask}`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
         }
-
-        mergedDraft = mergeProductDraft(currentDraft, {
-          [currentField]: fieldValue,
-        });
       }
 
       const validation = validateProductDraft(mergedDraft);
@@ -1074,7 +1146,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         product: validation.normalized,
       };
       const p = validation.normalized;
-      const msg = `⚠️ Confirma:\n¿Guardo el producto *${p.name}*?\n💵 Precio: ${formatMoney(p.price)}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📉 Stock mínimo: ${p.minStock}\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${p.description}\n(Sí/No)`;
+      const msg = `⚠️ Confirma:\n¿Guardo el producto *${p.name}*?\n💵 Precio: ${formatMoney(p.price)}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📉 Stock mínimo: ${p.minStock}\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${p.description}\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
       appendConversationEntry(client, "assistant", msg);
       await client.save();
       return msg;
@@ -1147,7 +1219,7 @@ Si no hay cambios, omite "product".`;
               p.minStock
             }\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${
               p.description
-            }\n(Sí/No)`;
+            }\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
             appendConversationEntry(client, "assistant", msg);
             await client.save();
             return msg;
@@ -1191,7 +1263,7 @@ Si no hay cambios, omite "product".`;
             p.minStock
           }\n📐 Unidad: ${p.unitOfMeasure}\n🏷️ Categoría: ${p.category}\n📝 Descripción: ${
             p.description
-          }\n(Sí/No)`;
+          }\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1378,7 +1450,7 @@ Si no hay cambios, omite "product".`;
             client: validation.normalized,
           };
           const nextClient = validation.normalized;
-          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name}* con teléfono *${nextClient.phone}* y documento *${nextClient.taxId}*?\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name}* con teléfono *${nextClient.phone}* y documento *${nextClient.taxId}*?\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1406,7 +1478,7 @@ Si no hay cambios, omite "product".`;
             product: validation.normalized,
           };
           const product = validation.normalized;
-          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name}*?\n💵 Precio: ${formatMoney(product.price)}\n💰 Costo: ${formatMoney(product.costPrice)}\n📦 Stock: ${product.stock}\n📉 Stock mínimo: ${product.minStock}\n📐 Unidad: ${product.unitOfMeasure}\n🏷️ Categoría: ${product.category}\n📝 Descripción: ${product.description}\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Guardo el producto *${product.name}*?\n💵 Precio: ${formatMoney(product.price)}\n💰 Costo: ${formatMoney(product.costPrice)}\n📦 Stock: ${product.stock}\n📉 Stock mínimo: ${product.minStock}\n📐 Unidad: ${product.unitOfMeasure}\n🏷️ Categoría: ${product.category}\n📝 Descripción: ${product.description}\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1756,26 +1828,15 @@ Si no hay cambios, omite "product".`;
 
           if (typeof options.sendInvoicePdf === "function") {
             try {
-              const [clientData, storeData] = await Promise.all([
-                Client.findOne({ _id: draft.clientId, tenant: tenantId }).lean(),
-                Setting.findOne({ tenant: tenantId })
-                  .select("storeName taxId phone email")
-                  .lean(),
-              ]);
-
-              const pdfPath = await generateInvoicePdf({
+              await sendInvoicePdfForOrder({
                 order: {
                   ...newOrder.toObject(),
+                  client: draft.clientId,
                   items: itemsParaGuardar,
                   totalAmount,
                 },
-                client: clientData || {},
-                store: storeData || {},
-              });
-
-              await options.sendInvoicePdf({
-                pdfPath,
-                caption: `Factura ${resolveOrderIdentifier(newOrder)} · Total ${formatMoney(totalAmount)}`,
+                tenantId,
+                options,
               });
               resp += "\n🧾 Factura PDF enviada.";
             } catch (invoiceError) {
@@ -2167,10 +2228,30 @@ Si no hay cambios, omite "product".`;
           return msg;
         }
 
-        const msg = buildInvoiceSuggestionMessage(order);
-        appendConversationEntry(client, "assistant", msg);
-        await client.save();
-        return msg;
+        if (typeof options.sendInvoicePdf !== "function") {
+          const msg = buildInvoiceSuggestionMessage(order);
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        try {
+          await sendInvoicePdfForOrder({
+            order,
+            tenantId,
+            options,
+          });
+          const msg = `🧾 Factura ${resolveOrderIdentifier(order)} generada y enviada por WhatsApp.`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        } catch (invoiceError) {
+          console.error("No se pudo generar/enviar la factura PDF solicitada:", invoiceError);
+          const msg = `⚠️ Encontré la venta ${resolveOrderIdentifier(order)}, pero no pude generar o enviar la factura PDF.`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
       }
 
       case "LISTAR_PRODUCTOS": {
