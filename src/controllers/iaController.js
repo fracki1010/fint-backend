@@ -104,6 +104,59 @@ const validateProductDraft = (rawProduct = {}) => {
   return { normalized, missing, invalid };
 };
 
+const wantsDefaultProductCompletion = (messageBody = "") => {
+  const text = normalizeText(messageBody);
+  return (
+    text.includes("completa asi") ||
+    text.includes("completar asi") ||
+    text.includes("asi esta bien") ||
+    text.includes("así está bien") ||
+    text.includes("por defecto") ||
+    text.includes("default")
+  );
+};
+
+const mergeProductDraft = (baseDraft = {}, incoming = {}) => {
+  const current = { ...(baseDraft || {}) };
+  const next = { ...(incoming || {}) };
+
+  return {
+    name: next.name !== undefined && next.name !== null && next.name !== "" ? next.name : current.name,
+    price: next.price !== undefined && next.price !== null && next.price !== "" ? next.price : current.price,
+    stock: next.stock !== undefined && next.stock !== null && next.stock !== "" ? next.stock : current.stock,
+    unitOfMeasure:
+      next.unitOfMeasure !== undefined && next.unitOfMeasure !== null && next.unitOfMeasure !== ""
+        ? next.unitOfMeasure
+        : next.unit !== undefined && next.unit !== null && next.unit !== ""
+          ? next.unit
+          : current.unitOfMeasure,
+    costPrice:
+      next.costPrice !== undefined && next.costPrice !== null && next.costPrice !== ""
+        ? next.costPrice
+        : next.cost !== undefined && next.cost !== null && next.cost !== ""
+          ? next.cost
+          : current.costPrice,
+  };
+};
+
+const extractProductFieldsFromMessage = async (messageBody, currentDraft = {}) => {
+  const prompt = `Extrae SOLO datos de producto desde el mensaje y responde JSON puro.
+Mensaje usuario: "${messageBody}"
+Borrador actual: ${JSON.stringify(currentDraft)}
+JSON esperado:
+{
+  "name": "string opcional",
+  "price": number opcional,
+  "stock": number opcional,
+  "unitOfMeasure": "unidad|caja|paquete|bolsa|botella|kg|g|litro|ml|metro opcional",
+  "costPrice": number opcional
+}
+Si un campo no aparece, omítelo.`;
+
+  const response = await processText(prompt);
+  return safeJsonParse(response) || {};
+};
+
 const getWhatsAppOwnerId = async () => {
   if (cachedWhatsAppOwner) return cachedWhatsAppOwner;
 
@@ -737,7 +790,60 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       await client.save();
     }
 
-    // --- REGLA 2: ¿HAY UNA ACCIÓN ESPERANDO CONFIRMACIÓN? ---
+    // --- REGLA 2: ¿HAY UNA ACCIÓN PENDIENTE DE COMPLETAR? ---
+    if (client.pendingAction?.intent === "CREAR_PRODUCTO_COMPLETION") {
+      const currentDraft = client.pendingAction.product || {};
+      let mergedDraft = currentDraft;
+
+      if (wantsDefaultProductCompletion(messageBody)) {
+        mergedDraft = {
+          ...currentDraft,
+          unitOfMeasure: currentDraft.unitOfMeasure || "unidad",
+          costPrice:
+            currentDraft.costPrice !== undefined && currentDraft.costPrice !== null
+              ? currentDraft.costPrice
+              : 0,
+        };
+      } else {
+        const extracted = await extractProductFieldsFromMessage(
+          messageBody,
+          currentDraft,
+        );
+        mergedDraft = mergeProductDraft(currentDraft, extracted);
+      }
+
+      const validation = validateProductDraft(mergedDraft);
+      if (validation.missing.length > 0 || validation.invalid.length > 0) {
+        client.pendingAction = {
+          intent: "CREAR_PRODUCTO_COMPLETION",
+          product: mergedDraft,
+        };
+        const missingText =
+          validation.missing.length > 0
+            ? `Falta: ${validation.missing.join(", ")}.`
+            : "";
+        const invalidText =
+          validation.invalid.length > 0
+            ? `Datos inválidos: ${validation.invalid.join(", ")}.`
+            : "";
+        const msg = `Vamos completando el producto.\n${missingText}\n${invalidText}\nPuedes enviarme solo lo que falta o responder "completa así" para usar unidad=unidad y costo=0 cuando aplique.`;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
+      client.pendingAction = {
+        intent: "CREAR_PRODUCTO",
+        product: validation.normalized,
+      };
+      const p = validation.normalized;
+      const msg = `⚠️ Confirma:\n¿Guardo el producto *${p.name}*?\n💵 Precio: ${formatMoney(p.price)}\n💰 Costo: ${formatMoney(p.costPrice)}\n📦 Stock: ${p.stock}\n📐 Unidad: ${p.unitOfMeasure}\n(Sí/No)`;
+      appendConversationEntry(client, "assistant", msg);
+      await client.save();
+      return msg;
+    }
+
+    // --- REGLA 3: ¿HAY UNA ACCIÓN ESPERANDO CONFIRMACIÓN? ---
     if (client.pendingAction) {
       // Usamos a Llama para entender si el usuario dijo "sí", "obvio", "dale" o si canceló
       const confirmPrompt = `El usuario debe confirmar esto: ${JSON.stringify(client.pendingAction)}.
@@ -924,7 +1030,11 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
               validation.invalid.length > 0
                 ? `Datos inválidos: ${validation.invalid.join(", ")}.`
                 : "";
-            const msg = `Para crear producto necesito todos los datos obligatorios.\n${missingText}\n${invalidText}\nEjemplo: crear producto Yerba, precio 1200, costo 900, stock 20, unidad paquete`;
+            client.pendingAction = {
+              intent: "CREAR_PRODUCTO_COMPLETION",
+              product: mergeProductDraft({}, classification.product || {}),
+            };
+            const msg = `Para crear producto necesito todos los datos obligatorios.\n${missingText}\n${invalidText}\nEnvíame solo lo que falta (por ejemplo: "unidad paquete, costo 900"), o responde "completa así" y completo con unidad=unidad y costo=0 si faltan esos campos.`;
             appendConversationEntry(client, "assistant", msg);
             await client.save();
             return msg;
