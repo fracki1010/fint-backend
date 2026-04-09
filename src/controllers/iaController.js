@@ -12,6 +12,17 @@ const { createAndDispatchNotification } = require("../services/notificationServi
 let cachedWhatsAppOwner = null;
 const MEMORY_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
 const MAX_HISTORY_ITEMS = 80;
+const PRODUCT_FIELD_ORDER = [
+  "name",
+  "price",
+  "costPrice",
+  "stock",
+  "minStock",
+  "unitOfMeasure",
+  "category",
+  "description",
+];
+const CLIENT_FIELD_ORDER = ["name", "phone", "taxId"];
 
 const toPositiveNumber = (value) => {
   const parsed = Number(value);
@@ -62,6 +73,26 @@ const parseNumberOrNull = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parseFirstNumberFromText = (value = "") => {
+  const match = value.toString().replace(",", ".").match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  return parseNumberOrNull(match[0]);
+};
+
+const isCancelMessage = (messageBody = "") => {
+  const text = normalizeText(messageBody);
+  return (
+    text === "cancelar" ||
+    text === "cancelado" ||
+    text === "cancela" ||
+    text.includes("cancela la accion") ||
+    text.includes("cancelar accion")
+  );
+};
+
+const getNextMissingField = (missing = [], orderedFields = []) =>
+  orderedFields.find((field) => missing.includes(field)) || missing[0] || null;
+
 const validateClientDraft = (rawClient = {}) => {
   const payload = rawClient || {};
   const normalized = {
@@ -70,9 +101,9 @@ const validateClientDraft = (rawClient = {}) => {
     taxId: (payload.taxId || "").toString().trim(),
   };
   const missing = [];
-  if (!normalized.name) missing.push("nombre");
-  if (!normalized.phone) missing.push("telefono");
-  if (!normalized.taxId) missing.push("documento fiscal");
+  if (!normalized.name) missing.push("name");
+  if (!normalized.phone) missing.push("phone");
+  if (!normalized.taxId) missing.push("taxId");
   return { normalized, missing };
 };
 
@@ -92,14 +123,14 @@ const validateProductDraft = (rawProduct = {}) => {
   };
 
   const missing = [];
-  if (!normalized.name) missing.push("nombre");
-  if (normalized.price === null) missing.push("precio");
+  if (!normalized.name) missing.push("name");
+  if (normalized.price === null) missing.push("price");
   if (normalized.stock === null) missing.push("stock");
-  if (!normalized.unitOfMeasure) missing.push("unidad");
-  if (normalized.costPrice === null) missing.push("costo");
-  if (!normalized.category) missing.push("categoria");
-  if (!normalized.description) missing.push("descripcion");
-  if (normalized.minStock === null) missing.push("stock minimo");
+  if (!normalized.unitOfMeasure) missing.push("unitOfMeasure");
+  if (normalized.costPrice === null) missing.push("costPrice");
+  if (!normalized.category) missing.push("category");
+  if (!normalized.description) missing.push("description");
+  if (normalized.minStock === null) missing.push("minStock");
 
   const invalid = [];
   if (normalized.price !== null && normalized.price < 0) invalid.push("precio no puede ser negativo");
@@ -110,6 +141,73 @@ const validateProductDraft = (rawProduct = {}) => {
     invalid.push("stock minimo no puede ser negativo");
 
   return { normalized, missing, invalid };
+};
+
+const formatMissingLabels = (missing = []) => {
+  const labelMap = {
+    name: "nombre",
+    price: "precio",
+    stock: "stock",
+    unitOfMeasure: "unidad",
+    costPrice: "costo",
+    category: "categoria",
+    description: "descripcion",
+    minStock: "stock minimo",
+    phone: "telefono",
+    taxId: "documento fiscal",
+  };
+  return missing.map((key) => labelMap[key] || key).join(", ");
+};
+
+const buildClientFieldQuestion = (field) => {
+  if (field === "name") return "👤 ¿Cuál es el nombre del cliente?";
+  if (field === "phone") return "📞 ¿Cuál es el teléfono del cliente?";
+  if (field === "taxId")
+    return "🧾 ¿Cuál es el documento fiscal del cliente (CUIT/NIT/RUC)?";
+  return "¿Qué dato del cliente deseas completar?";
+};
+
+const buildProductFieldQuestion = async (field, tenantId) => {
+  if (field === "name") return "🧩 ¿Qué nombre le ponemos al producto?";
+  if (field === "price") return "💵 ¿Cuál es el precio de venta?";
+  if (field === "costPrice") return "💰 ¿Cuál es el costo de compra?";
+  if (field === "stock") return "📦 ¿Cuánto stock inicial tendrá?";
+  if (field === "minStock") return "📉 ¿Cuál será el stock mínimo?";
+  if (field === "unitOfMeasure")
+    return "📐 ¿Qué unidad tendrá? (unidad, caja, paquete, bolsa, botella, kg, g, litro, ml, metro)";
+  if (field === "category") {
+    const categories = await getTenantCategories(tenantId);
+    if (categories.length > 0) {
+      return `🏷️ ¿A qué categoría pertenece?\nCategorías actuales:\n${categories
+        .map((item, index) => `${index + 1}. ${item}`)
+        .join("\n")}\nPuedes elegir una o escribir "nueva categoría <nombre>".`;
+    }
+    return "🏷️ ¿A qué categoría pertenece? (Aún no hay categorías, puedes crear una nueva)";
+  }
+  if (field === "description") return "📝 ¿Qué descripción le quieres poner?";
+  return "¿Qué dato del producto quieres completar?";
+};
+
+const extractClientFieldValue = (field, messageBody = "") => {
+  const text = messageBody.toString().trim();
+  if (!text) return null;
+  if (field === "name") return text;
+  if (field === "phone") return normalizePhone(text);
+  if (field === "taxId") return text;
+  return null;
+};
+
+const extractProductFieldValue = (field, messageBody = "") => {
+  const text = messageBody.toString().trim();
+  if (!text) return null;
+  if (field === "name") return text;
+  if (field === "price" || field === "costPrice" || field === "stock" || field === "minStock") {
+    return parseFirstNumberFromText(text);
+  }
+  if (field === "unitOfMeasure") return normalizeUnit(text);
+  if (field === "category") return text.replace(/^nueva categoria\s*/i, "").trim() || text;
+  if (field === "description") return text;
+  return null;
 };
 
 const wantsDefaultProductCompletion = (messageBody = "") => {
@@ -843,7 +941,60 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     }
 
     // --- REGLA 2: ¿HAY UNA ACCIÓN PENDIENTE DE COMPLETAR? ---
-    if (client.pendingAction?.intent === "CREAR_PRODUCTO_COMPLETION") {
+    if (client.pendingAction?.intent === "CREAR_CLIENTE_WIZARD") {
+      if (isCancelMessage(messageBody)) {
+        client.pendingAction = null;
+        const msg = "❌ Creación de cliente cancelada.";
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
+      const draft = client.pendingAction.client || {};
+      const currentField =
+        client.pendingAction.currentField ||
+        getNextMissingField(validateClientDraft(draft).missing, CLIENT_FIELD_ORDER);
+
+      const value = extractClientFieldValue(currentField, messageBody);
+      if (value === null || value === "") {
+        const ask = buildClientFieldQuestion(currentField);
+        const msg = `No llegué a tomar ese dato.\n${ask}`;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
+      const merged = { ...draft, [currentField]: value };
+      const validation = validateClientDraft(merged);
+      if (validation.missing.length > 0) {
+        const nextField = getNextMissingField(validation.missing, CLIENT_FIELD_ORDER);
+        client.pendingAction = {
+          intent: "CREAR_CLIENTE_WIZARD",
+          client: merged,
+          currentField: nextField,
+        };
+        const ask = buildClientFieldQuestion(nextField);
+        const msg = `Perfecto ✅\n${ask}`;
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
+      client.pendingAction = {
+        intent: "CREAR_CLIENTE",
+        client: validation.normalized,
+      };
+      const c = validation.normalized;
+      const msg = `⚠️ Confirma:\n¿Creo el cliente *${c.name}* con teléfono *${c.phone}* y documento *${c.taxId}*?\n(Sí/No)`;
+      appendConversationEntry(client, "assistant", msg);
+      await client.save();
+      return msg;
+    }
+
+    if (
+      client.pendingAction?.intent === "CREAR_PRODUCTO_COMPLETION" ||
+      client.pendingAction?.intent === "CREAR_PRODUCTO_WIZARD"
+    ) {
       const currentDraft = client.pendingAction.product || {};
       let mergedDraft = currentDraft;
 
@@ -863,33 +1014,56 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
               : 0,
         };
       } else {
-        const extracted = await extractProductFieldsFromMessage(
-          messageBody,
-          currentDraft,
-        );
-        mergedDraft = mergeProductDraft(currentDraft, extracted);
+        const currentField =
+          client.pendingAction.currentField ||
+          getNextMissingField(
+            validateProductDraft(currentDraft).missing,
+            PRODUCT_FIELD_ORDER,
+          );
+
+        const fieldValue = extractProductFieldValue(currentField, messageBody);
+        if (fieldValue === null || fieldValue === "") {
+          const ask = await buildProductFieldQuestion(currentField, tenantId);
+          const msg = `No llegué a tomar ese dato.\n${ask}`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        mergedDraft = mergeProductDraft(currentDraft, {
+          [currentField]: fieldValue,
+        });
       }
 
       const validation = validateProductDraft(mergedDraft);
       if (validation.missing.length > 0 || validation.invalid.length > 0) {
+        if (validation.invalid.length > 0) {
+          client.pendingAction = {
+            intent: "CREAR_PRODUCTO_WIZARD",
+            product: mergedDraft,
+            currentField:
+              validation.invalid[0].includes("precio")
+                ? "price"
+                : validation.invalid[0].includes("costo")
+                  ? "costPrice"
+                  : validation.invalid[0].includes("stock minimo")
+                    ? "minStock"
+                    : "stock",
+          };
+          const msg = `Hay un dato inválido: ${validation.invalid.join(", ")}.\nVolvamos a cargar ese valor.`;
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
+        const nextField = getNextMissingField(validation.missing, PRODUCT_FIELD_ORDER);
         client.pendingAction = {
-          intent: "CREAR_PRODUCTO_COMPLETION",
+          intent: "CREAR_PRODUCTO_WIZARD",
           product: mergedDraft,
+          currentField: nextField,
         };
-        const missingText =
-          validation.missing.length > 0
-            ? `Falta: ${validation.missing.join(", ")}.`
-            : "";
-        const invalidText =
-          validation.invalid.length > 0
-            ? `Datos inválidos: ${validation.invalid.join(", ")}.`
-            : "";
-        const categories = await getTenantCategories(tenantId);
-        const categoriesText =
-          validation.missing.includes("categoria") && categories.length > 0
-            ? `Categorias existentes: ${categories.join(", ")}. Puedes usar una o decir "nueva categoria <nombre>".`
-            : "";
-        const msg = `Vamos completando el producto.\n${missingText}\n${invalidText}\n${categoriesText}\nPuedes enviarme solo lo que falta o responder "completa así" para usar defaults (unidad=unidad, costo=0, categoria=General, descripcion=Sin descripcion, stock minimo=0).`;
+        const ask = await buildProductFieldQuestion(nextField, tenantId);
+        const msg = `Perfecto ✅\n${ask}`;
         appendConversationEntry(client, "assistant", msg);
         await client.save();
         return msg;
@@ -951,7 +1125,9 @@ Si no hay cambios, omite "product".`;
                 product: merged,
               };
               const msg = `Perfecto, no lo creo todavía. Ajustemos primero:\n${
-                validation.missing.length ? `Falta: ${validation.missing.join(", ")}.\n` : ""
+                validation.missing.length
+                  ? `Falta: ${formatMissingLabels(validation.missing)}.\n`
+                  : ""
               }${
                 validation.invalid.length ? `Datos inválidos: ${validation.invalid.join(", ")}.` : ""
               }`;
@@ -993,7 +1169,9 @@ Si no hay cambios, omite "product".`;
               product: merged,
             };
             const msg = `Listo, aplico cambios. Aún falta:\n${
-              validation.missing.length ? `- ${validation.missing.join(", ")}` : ""
+              validation.missing.length
+                ? `- ${formatMissingLabels(validation.missing)}`
+                : ""
             }${
               validation.invalid.length ? `\n- ${validation.invalid.join(", ")}` : ""
             }`;
@@ -1179,7 +1357,17 @@ Si no hay cambios, omite "product".`;
         if (classification.intent === "CREAR_CLIENTE") {
           const validation = validateClientDraft(classification.client || {});
           if (validation.missing.length > 0) {
-            const msg = `Para crear cliente necesito todos los datos obligatorios.\nFalta: ${validation.missing.join(", ")}.\nEjemplo: crear cliente Juan Perez, telefono 2622517447, documento 20333444556`;
+            const nextField = getNextMissingField(
+              validation.missing,
+              CLIENT_FIELD_ORDER,
+            );
+            client.pendingAction = {
+              intent: "CREAR_CLIENTE_WIZARD",
+              client: classification.client || {},
+              currentField: nextField,
+            };
+            const ask = buildClientFieldQuestion(nextField);
+            const msg = `Vamos a crearlo paso a paso.\n${ask}`;
             appendConversationEntry(client, "assistant", msg);
             await client.save();
             return msg;
@@ -1197,24 +1385,17 @@ Si no hay cambios, omite "product".`;
         } else if (classification.intent === "CREAR_PRODUCTO") {
           const validation = validateProductDraft(classification.product || {});
           if (validation.missing.length > 0 || validation.invalid.length > 0) {
-            const missingText =
-              validation.missing.length > 0
-                ? `Falta: ${validation.missing.join(", ")}.`
-                : "";
-            const invalidText =
-              validation.invalid.length > 0
-                ? `Datos inválidos: ${validation.invalid.join(", ")}.`
-                : "";
+            const nextField = getNextMissingField(
+              validation.missing,
+              PRODUCT_FIELD_ORDER,
+            );
             client.pendingAction = {
-              intent: "CREAR_PRODUCTO_COMPLETION",
+              intent: "CREAR_PRODUCTO_WIZARD",
               product: mergeProductDraft({}, classification.product || {}),
+              currentField: nextField,
             };
-            const categories = await getTenantCategories(tenantId);
-            const categoriesText =
-              categories.length > 0
-                ? `Categorías disponibles: ${categories.join(", ")}. También puedes decir "nueva categoría <nombre>".`
-                : "Aún no hay categorías cargadas. Puedes definir una nueva.";
-            const msg = `Para crear producto necesito todos los datos obligatorios.\n${missingText}\n${invalidText}\n${categoriesText}\nEnvíame solo lo que falta (ej: "unidad paquete, costo 900, stock mínimo 5, descripción Yerba premium").\nSi prefieres, responde "completa así" y uso defaults para faltantes opcionales de negocio.`;
+            const ask = await buildProductFieldQuestion(nextField, tenantId);
+            const msg = `Vamos a crearlo paso a paso.\n${ask}`;
             appendConversationEntry(client, "assistant", msg);
             await client.save();
             return msg;
@@ -1254,7 +1435,9 @@ Si no hay cambios, omite "product".`;
       case "CREAR_CLIENTE": {
         const validation = validateClientDraft(classification.client || {});
         if (validation.missing.length > 0) {
-          const msg = `❌ No puedo crear el cliente porque faltan datos: ${validation.missing.join(", ")}.`;
+          const msg = `❌ No puedo crear el cliente porque faltan datos: ${formatMissingLabels(
+            validation.missing,
+          )}.`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1305,7 +1488,7 @@ Si no hay cambios, omite "product".`;
         if (validation.missing.length > 0 || validation.invalid.length > 0) {
           const msg = `❌ No puedo crear el producto.\n${
             validation.missing.length > 0
-              ? `Falta: ${validation.missing.join(", ")}.\n`
+              ? `Falta: ${formatMissingLabels(validation.missing)}.\n`
               : ""
           }${
             validation.invalid.length > 0
