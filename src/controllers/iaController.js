@@ -159,6 +159,11 @@ const formatMissingLabels = (missing = []) => {
   return missing.map((key) => labelMap[key] || key).join(", ");
 };
 
+const buildRemainingFieldsHint = (missing = []) => {
+  if (!Array.isArray(missing) || missing.length === 0) return "";
+  return `Datos pendientes: ${formatMissingLabels(missing)}.`;
+};
+
 const buildClientFieldQuestion = (field) => {
   if (field === "name") return "👤 ¿Cuál es el nombre del cliente?";
   if (field === "phone") return "📞 ¿Cuál es el teléfono del cliente?";
@@ -534,6 +539,19 @@ const resolveSuggestionSelection = (messageBody, options = []) => {
     return options[choice - 1];
   }
 
+  // Permite respuestas como "factura 1", "opcion 2", etc.
+  const numericMatch = normalizedReply.match(/\b(\d{1,2})\b/);
+  if (numericMatch) {
+    const numericChoice = Number(numericMatch[1]);
+    if (
+      Number.isInteger(numericChoice) &&
+      numericChoice >= 1 &&
+      numericChoice <= options.length
+    ) {
+      return options[numericChoice - 1];
+    }
+  }
+
   const exactByName = options.find((option) => normalizeText(option) === normalizedReply);
   if (exactByName) return exactByName;
 
@@ -771,18 +789,21 @@ const buildClientSalesDetailsMessage = (clientData, orders = []) => {
     const dateLabel = order.createdAt
       ? new Date(order.createdAt).toLocaleString()
       : "sin fecha";
+    const generalStatus = order.status || order.salesStatus || "-";
+    const salesStatus = order.salesStatus || order.status || "-";
+    const paymentStatus = order.paymentStatus || "-";
+    const deliveryStatus = order.deliveryStatus || "-";
     lines.push(`\n🔹 Venta ${index + 1}`);
     lines.push(`🧩 Nro: ${resolveOrderIdentifier(order)}`);
     lines.push(`📅 Fecha: ${dateLabel}`);
     lines.push(`💰 Total: ${formatMoney(order.totalAmount)}`);
-    lines.push(
-      `📌 Estado: ${order.salesStatus || "-"} / ${order.paymentStatus || "-"} / ${order.deliveryStatus || "-"}`,
-    );
+    lines.push(`📌 Estado general: ${generalStatus}`);
+    lines.push(`📌 Venta/Pago/Entrega: ${salesStatus} / ${paymentStatus} / ${deliveryStatus}`);
     lines.push("🛍️ Items:");
     lines.push(buildOrderLineItemsText(order));
   });
 
-  lines.push("\n👉 Si quieres factura, responde: factura 1, factura 2, etc.");
+  lines.push("\n👉 Responde factura para enviartela.");
   return lines.join("\n");
 };
 
@@ -808,13 +829,25 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       client.pendingSuggestion?.options?.length &&
       pendingSuggestionAge <= MEMORY_WINDOW_MS
     ) {
-      const selectedName = resolveSuggestionSelection(
+      const pendingIntent = client.pendingSuggestion.intent;
+      const normalizedReply = normalizeText(messageBody);
+      let selectedName = resolveSuggestionSelection(
         messageBody,
         client.pendingSuggestion.options,
       );
+      if (
+        !selectedName &&
+        pendingIntent === "FACTURA_VENTA" &&
+        (normalizedReply === "factura" ||
+          normalizedReply === "enviar factura" ||
+          normalizedReply === "mandar factura" ||
+          normalizedReply === "enviame factura" ||
+          normalizedReply === "envia factura")
+      ) {
+        selectedName = client.pendingSuggestion.options[0] || null;
+      }
 
       if (selectedName) {
-        const pendingIntent = client.pendingSuggestion.intent;
         const pendingProduct = client.pendingSuggestion.product || {};
         client.pendingSuggestion = null;
 
@@ -1022,7 +1055,9 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         merged[currentField] === ""
       ) {
         const ask = buildClientFieldQuestion(currentField);
-        const msg = `No llegué a tomar ese dato.\n${ask}`;
+        const remaining = validateClientDraft(merged).missing;
+        const hint = buildRemainingFieldsHint(remaining);
+        const msg = `No llegué a tomar ese dato.\n${hint ? `${hint}\n` : ""}${ask}`;
         appendConversationEntry(client, "assistant", msg);
         await client.save();
         return msg;
@@ -1037,7 +1072,8 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           currentField: nextField,
         };
         const ask = buildClientFieldQuestion(nextField);
-        const msg = `Perfecto ✅\n${ask}`;
+        const hint = buildRemainingFieldsHint(validation.missing);
+        const msg = `Perfecto ✅\n${hint}\n${ask}`;
         appendConversationEntry(client, "assistant", msg);
         await client.save();
         return msg;
@@ -1439,7 +1475,8 @@ Si no hay cambios, omite "product".`;
               currentField: nextField,
             };
             const ask = buildClientFieldQuestion(nextField);
-            const msg = `Vamos a crearlo paso a paso.\n${ask}`;
+            const hint = buildRemainingFieldsHint(validation.missing);
+            const msg = `Vamos a crearlo paso a paso.\n${hint}\n${ask}`;
             appendConversationEntry(client, "assistant", msg);
             await client.save();
             return msg;
