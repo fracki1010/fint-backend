@@ -24,14 +24,9 @@ const PRODUCT_FIELD_ORDER = [
 ];
 const CLIENT_FIELD_ORDER = [
   "name",
-  "phone",
-  "taxId",
-  "email",
   "address",
-  "fiscalAddress",
-  "company",
-  "notes",
-  "debt",
+  "phone",
+  "email",
 ];
 
 const toPositiveNumber = (value) => {
@@ -109,30 +104,17 @@ const validateClientDraft = (rawClient = {}) => {
   const normalized = {
     name: (payload.name || "").toString().trim(),
     phone: normalizePhone(payload.phone || ""),
-    taxId: (payload.taxId || "").toString().trim(),
-    email: normalizeEmail(payload.email || ""),
     address: (payload.address || "").toString().trim(),
-    fiscalAddress: (payload.fiscalAddress || "").toString().trim(),
-    company: (payload.company || "").toString().trim(),
-    notes: (payload.notes || "").toString().trim(),
-    debt: parseNumberOrNull(payload.debt),
+    email: normalizeEmail(payload.email || ""),
   };
   const missing = [];
   if (!normalized.name) missing.push("name");
   if (!normalized.phone) missing.push("phone");
-  if (!normalized.taxId) missing.push("taxId");
-  if (!normalized.email) missing.push("email");
   if (!normalized.address) missing.push("address");
-  if (!normalized.fiscalAddress) missing.push("fiscalAddress");
-  if (!normalized.company) missing.push("company");
-  if (!normalized.notes) missing.push("notes");
-  if (normalized.debt === null) missing.push("debt");
+  if (!normalized.email) missing.push("email");
   const invalid = [];
   if (normalized.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized.email)) {
     invalid.push("email invalido");
-  }
-  if (normalized.debt !== null && normalized.debt < 0) {
-    invalid.push("deuda no puede ser negativa");
   }
   return { normalized, missing, invalid };
 };
@@ -184,13 +166,8 @@ const formatMissingLabels = (missing = []) => {
     description: "descripcion",
     minStock: "stock minimo",
     phone: "telefono",
-    taxId: "documento fiscal",
     email: "email",
     address: "direccion",
-    fiscalAddress: "direccion fiscal",
-    company: "empresa",
-    notes: "notas",
-    debt: "deuda inicial",
   };
   return missing.map((key) => labelMap[key] || key).join(", ");
 };
@@ -203,17 +180,8 @@ const buildRemainingFieldsHint = (missing = []) => {
 const buildClientFieldQuestion = (field) => {
   if (field === "name") return "👤 ¿Cuál es el nombre del cliente?";
   if (field === "phone") return "📞 ¿Cuál es el teléfono del cliente?";
-  if (field === "taxId")
-    return "🧾 ¿Cuál es el documento fiscal del cliente (CUIT/NIT/RUC)?";
-  if (field === "email") return "📧 ¿Cuál es el email del cliente?";
   if (field === "address") return "📍 ¿Cuál es la dirección del cliente?";
-  if (field === "fiscalAddress")
-    return "🏢 ¿Cuál es la dirección fiscal del cliente?";
-  if (field === "company") return "🏬 ¿Cuál es la empresa/razón social del cliente?";
-  if (field === "notes")
-    return "📝 ¿Qué notas deseas guardar para este cliente?";
-  if (field === "debt")
-    return "💳 ¿Cuál es la deuda inicial del cliente? (si no tiene, responde 0)";
+  if (field === "email") return "📧 ¿Cuál es el email del cliente?";
   return "¿Qué dato del cliente deseas completar?";
 };
 
@@ -243,13 +211,8 @@ const extractClientFieldValue = (field, messageBody = "") => {
   if (!text) return null;
   if (field === "name") return text;
   if (field === "phone") return normalizePhone(text);
-  if (field === "taxId") return text;
-  if (field === "email") return normalizeEmail(text);
   if (field === "address") return text;
-  if (field === "fiscalAddress") return text;
-  if (field === "company") return text;
-  if (field === "notes") return text;
-  if (field === "debt") return parseFirstNumberFromText(text);
+  if (field === "email") return normalizeEmail(text);
   return null;
 };
 
@@ -344,13 +307,8 @@ JSON esperado:
 {
   "name": "string opcional",
   "phone": "string opcional",
-  "taxId": "string opcional",
-  "email": "string opcional",
   "address": "string opcional",
-  "fiscalAddress": "string opcional",
-  "company": "string opcional",
-  "notes": "string opcional",
-  "debt": number opcional
+  "email": "string opcional"
 }
 Si un campo no aparece, omítelo.`;
 
@@ -1145,12 +1103,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         client.pendingAction = {
           intent: "CREAR_CLIENTE_WIZARD",
           client: merged,
-          currentField:
-            validation.invalid[0].includes("email")
-              ? "email"
-              : validation.invalid[0].includes("deuda")
-                ? "debt"
-                : currentField,
+          currentField: validation.invalid[0].includes("email") ? "email" : currentField,
         };
         const ask = buildClientFieldQuestion(client.pendingAction.currentField);
         const msg = `Hay un dato inválido: ${validation.invalid.join(", ")}.\n${ask}`;
@@ -1174,12 +1127,12 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
         return msg;
       }
 
-      client.pendingAction = {
-        intent: "CREAR_CLIENTE",
-        client: validation.normalized,
-      };
-      const c = validation.normalized;
-      const msg = `⚠️ Confirma:\n¿Creo el cliente *${c.name}*?\n📞 Teléfono: ${c.phone}\n🧾 Documento: ${c.taxId}\n📧 Email: ${c.email}\n📍 Dirección: ${c.address}\n🏢 Dirección fiscal: ${c.fiscalAddress}\n🏬 Empresa: ${c.company}\n📝 Notas: ${c.notes}\n💳 Deuda inicial: ${formatMoney(c.debt)}\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
+        client.pendingAction = {
+          intent: "CREAR_CLIENTE",
+          client: validation.normalized,
+        };
+        const c = validation.normalized;
+      const msg = `⚠️ Confirma:\n¿Creo el cliente *${c.name}*?\n📍 Dirección: ${c.address}\n📞 Teléfono: ${c.phone}\n📧 Email: ${c.email}\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
       appendConversationEntry(client, "assistant", msg);
       await client.save();
       return msg;
@@ -1440,7 +1393,7 @@ Si no hay cambios, omite "product".`;
             ${conversationContext}
             Analiza el mensaje y devuelve ÚNICAMENTE JSON:
             1. Crear producto (siempre completo): { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0, "unitOfMeasure": "unidad|caja|kg|litro|...", "costPrice": 0, "category": "...", "description": "...", "minStock": 0 } }
-            2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "taxId": "...", "email": "...", "address": "...", "fiscalAddress": "...", "company": "...", "notes": "...", "debt": 0 } }
+            2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "address": "...", "email": "..." } }
             3. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
             4. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
             5. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
@@ -1567,12 +1520,7 @@ Si no hay cambios, omite "product".`;
             client.pendingAction = {
               intent: "CREAR_CLIENTE_WIZARD",
               client: classification.client || {},
-              currentField:
-                validation.invalid[0]?.includes("email")
-                  ? "email"
-                  : validation.invalid[0]?.includes("deuda")
-                    ? "debt"
-                    : nextField,
+              currentField: validation.invalid[0]?.includes("email") ? "email" : nextField,
             };
             const ask = buildClientFieldQuestion(client.pendingAction.currentField);
             const hint = buildRemainingFieldsHint(validation.missing);
@@ -1591,7 +1539,7 @@ Si no hay cambios, omite "product".`;
             client: validation.normalized,
           };
           const nextClient = validation.normalized;
-          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name}*?\n📞 Teléfono: ${nextClient.phone}\n🧾 Documento: ${nextClient.taxId}\n📧 Email: ${nextClient.email}\n📍 Dirección: ${nextClient.address}\n🏢 Dirección fiscal: ${nextClient.fiscalAddress}\n🏬 Empresa: ${nextClient.company}\n📝 Notas: ${nextClient.notes}\n💳 Deuda inicial: ${formatMoney(nextClient.debt)}\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
+          const msg = `⚠️ Confirma:\n¿Creo el cliente *${nextClient.name}*?\n📍 Dirección: ${nextClient.address}\n📞 Teléfono: ${nextClient.phone}\n📧 Email: ${nextClient.email}\nSi quieres que cambie algo, dilo.\n(Sí/No)`;
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1664,13 +1612,8 @@ Si no hay cambios, omite "product".`;
         const {
           name: clientName,
           phone: clientPhone,
-          taxId: clientTaxId,
-          email: clientEmail,
           address: clientAddress,
-          fiscalAddress: clientFiscalAddress,
-          company: clientCompany,
-          notes: clientNotes,
-          debt: clientDebt,
+          email: clientEmail,
         } = validation.normalized;
 
         const existingClient = await Client.findOne({
@@ -1689,13 +1632,13 @@ Si no hay cambios, omite "product".`;
           tenant: tenantId,
           name: clientName,
           phone: clientPhone,
-          taxId: clientTaxId || "",
+          taxId: "",
           email: clientEmail || undefined,
           address: clientAddress || undefined,
-          fiscalAddress: clientFiscalAddress || clientAddress || undefined,
-          company: clientCompany || undefined,
-          notes: clientNotes || undefined,
-          debt: clientDebt || 0,
+          fiscalAddress: clientAddress || undefined,
+          company: undefined,
+          notes: undefined,
+          debt: 0,
           isActive: true,
           deletedAt: null,
         });
@@ -1711,7 +1654,7 @@ Si no hay cambios, omite "product".`;
           },
         });
 
-        const msg = `✅ Cliente creado: ${newClient.name} · ${newClient.phone}\n📧 ${newClient.email || "-"}\n📍 ${newClient.address || "-"}\n🏢 ${newClient.fiscalAddress || "-"}\n🏬 ${newClient.company || "-"}\n💳 ${formatMoney(newClient.debt || 0)}`;
+        const msg = `✅ Cliente creado: ${newClient.name} · ${newClient.phone}\n📍 ${newClient.address || "-"}\n📧 ${newClient.email || "-"}\nSi quieres cambiar algo más, hazlo desde la app.`;
         appendConversationEntry(client, "assistant", msg);
         await client.save();
         return msg;
