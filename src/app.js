@@ -47,6 +47,13 @@ function createApp(options = {}) {
   app.use("/api/dashboard", authMiddleware, require("./routes/dashboardRoutes"));
   app.use("/api/financial", authMiddleware, require("./routes/financialRoutes"));
   app.use("/api/whatsapp", authMiddleware, require("./routes/whatsappRoutes"));
+  app.use("/api/supplies", authMiddleware, require("./routes/supplyRoutes"));
+  app.use("/api/purchases", authMiddleware, require("./routes/purchaseRoutes"));
+  app.use(
+    "/api/suppliers",
+    authMiddleware,
+    require("./routes/supplierAccountRoutes"),
+  );
   app.use("/api/notifications", require("./routes/notificationRoutes"));
   app.use("/api/audit-logs", authMiddleware, require("./routes/auditLogRoutes"));
 

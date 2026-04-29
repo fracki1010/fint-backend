@@ -143,6 +143,76 @@ const stockQuerySchema = paginationQuery.extend({
   dateTo: z.string().optional(),
 });
 
+const createSupplyBody = z.object({
+  sku: z.string().trim().optional(),
+  name: z.string().trim().min(1, "Nombre requerido"),
+  unit: z
+    .enum(["unidad", "kg", "g", "litro", "ml", "metro", "caja", "paquete"])
+    .optional(),
+  currentStock: z.coerce.number().min(0).optional(),
+  minStock: z.coerce.number().min(0).optional(),
+  referenceCost: z.coerce.number().min(0).optional(),
+});
+
+const updateSupplyBody = z.object({
+  sku: z.string().trim().optional(),
+  name: z.string().trim().min(1).optional(),
+  unit: z
+    .enum(["unidad", "kg", "g", "litro", "ml", "metro", "caja", "paquete"])
+    .optional(),
+  minStock: z.coerce.number().min(0).optional(),
+  referenceCost: z.coerce.number().min(0).optional(),
+});
+
+const supplyMovementBody = z.object({
+  type: z.enum(["IN", "OUT", "ADJUST"]),
+  quantity: z.coerce.number().positive("Cantidad invalida"),
+  reason: z.string().trim().min(1, "Motivo requerido"),
+  sourceType: z.string().trim().optional(),
+  sourceId: z.string().trim().optional(),
+});
+
+const purchaseItemBody = z.object({
+  supplyItemId: objectId,
+  quantity: z.coerce.number().positive("Cantidad invalida"),
+  unitCost: z.coerce.number().min(0, "Costo invalido"),
+  lineTotal: z.coerce.number().min(0, "Subtotal invalido"),
+});
+
+const createPurchaseBody = z.object({
+  supplierId: objectId,
+  date: z.string().trim().min(1, "Fecha requerida"),
+  paymentCondition: z.enum(["CASH", "CREDIT"]),
+  subtotal: z.coerce.number().min(0),
+  tax: z.coerce.number().min(0),
+  total: z.coerce.number().min(0),
+  notes: z.string().trim().optional(),
+  items: z.array(purchaseItemBody).min(1, "Debes incluir al menos un item"),
+});
+
+const supplierPaymentBody = z.object({
+  date: z.string().trim().min(1, "Fecha requerida"),
+  amount: z.coerce.number().positive("Monto invalido"),
+  paymentMethod: z.string().trim().optional(),
+  reference: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+});
+
+const supplierAccountEntryBody = z.object({
+  date: z.string().trim().min(1, "Fecha requerida"),
+  type: z.enum(["CHARGE", "CREDIT_NOTE", "DEBIT_NOTE"]),
+  amount: z.coerce.number().positive("Monto invalido"),
+  purchaseId: objectId.optional(),
+  paymentMethod: z.string().trim().optional(),
+  reference: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+});
+
+const supplierStatementQuery = z.object({
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+});
+
 const includeInactiveQuery = z.object({
   includeInactive: z.enum(["true", "false"]).optional(),
   page: numericString,
@@ -212,6 +282,13 @@ const notificationIdParam = z.object({
 });
 
 module.exports = {
+  createSupplyBody,
+  updateSupplyBody,
+  supplyMovementBody,
+  createPurchaseBody,
+  supplierPaymentBody,
+  supplierAccountEntryBody,
+  supplierStatementQuery,
   loginBody,
   bootstrapBody,
   createUserBody,
