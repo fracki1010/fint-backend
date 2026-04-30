@@ -49,6 +49,7 @@ function createApp(options = {}) {
   app.use("/api/whatsapp", authMiddleware, require("./routes/whatsappRoutes"));
   app.use("/api/supplies", authMiddleware, require("./routes/supplyRoutes"));
   app.use("/api/purchases", authMiddleware, require("./routes/purchaseRoutes"));
+  app.use("/api/recipes", authMiddleware, require("./routes/recipeRoutes"));
   app.use(
     "/api/suppliers",
     authMiddleware,
