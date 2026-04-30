@@ -4,7 +4,7 @@ const Recipe = require("../models/recipe.model");
 const Supply = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const ProductionLog = require("../models/productionLog.model");
-const Product = require("../models/product.model");
+const { Product } = require("../models/product.model");
 const { sendError, handleServerError } = require("../utils/http");
 const { notifyLowStock } = require("../utils/stockAlerts");
 

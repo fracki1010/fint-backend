@@ -3,6 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 
 const authMiddleware = require("./middlewares/authMiddleware");
+const roleMiddleware = require("./middlewares/roleMiddleware");
 const requestContextMiddleware = require("./middlewares/requestContextMiddleware");
 const requestLoggerMiddleware = require("./middlewares/requestLoggerMiddleware");
 const auditMiddleware = require("./middlewares/auditMiddleware");
@@ -45,8 +46,8 @@ function createApp(options = {}) {
     require("./routes/stockMovementRoutes"),
   );
   app.use("/api/dashboard", authMiddleware, require("./routes/dashboardRoutes"));
-  app.use("/api/financial", authMiddleware, require("./routes/financialRoutes"));
-  app.use("/api/whatsapp", authMiddleware, require("./routes/whatsappRoutes"));
+  app.use("/api/financial", authMiddleware, roleMiddleware.requireRole("admin", "contabilidad"), require("./routes/financialRoutes"));
+  app.use("/api/whatsapp", authMiddleware, roleMiddleware.requireRole("admin"), require("./routes/whatsappRoutes"));
   app.use("/api/supplies", authMiddleware, require("./routes/supplyRoutes"));
   app.use("/api/purchases", authMiddleware, require("./routes/purchaseRoutes"));
   app.use("/api/recipes", authMiddleware, require("./routes/recipeRoutes"));
@@ -55,6 +56,7 @@ function createApp(options = {}) {
     authMiddleware,
     require("./routes/supplierAccountRoutes"),
   );
+  app.use("/api/team", authMiddleware, require("./routes/teamRoutes"));
   app.use("/api/notifications", require("./routes/notificationRoutes"));
   app.use("/api/audit-logs", authMiddleware, require("./routes/auditLogRoutes"));
 

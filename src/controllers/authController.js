@@ -25,6 +25,7 @@ const toAuthResponse = (user) => ({
     _id: user._id,
     fullName: user.fullName,
     email: user.email,
+    role: user.role || "admin",
     isActive: user.isActive,
     isSuperAdmin: user.isSuperAdmin,
     createdAt: user.createdAt,
@@ -122,7 +123,19 @@ exports.login = async (req, res) => {
 };
 
 exports.me = async (req, res) => {
-  return res.json({ user: req.user });
+  const u = req.user;
+  return res.json({
+    user: {
+      _id: u._id,
+      fullName: u.fullName,
+      email: u.email,
+      role: u.role || "admin",
+      isActive: u.isActive,
+      isSuperAdmin: u.isSuperAdmin,
+      createdAt: u.createdAt,
+      updatedAt: u.updatedAt,
+    },
+  });
 };
 
 exports.bootstrapSuperAdmin = async (req, res) => {
