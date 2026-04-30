@@ -10,6 +10,7 @@ const {
 const router = express.Router();
 
 router.get("/", purchaseController.getPurchases);
+router.get("/dashboard", purchaseController.getDashboard);
 router.get("/:id", validateRequest({ params: idParam }), purchaseController.getPurchaseById);
 router.post("/", validateRequest({ body: createPurchaseBody }), purchaseController.createPurchase);
 router.post("/:id/confirm", validateRequest({ params: idParam }), purchaseController.confirmPurchase);

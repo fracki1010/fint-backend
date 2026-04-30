@@ -6,6 +6,149 @@ const SupplyMovement = require("../models/supplyMovement.model");
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
 const { sendError, handleServerError } = require("../utils/http");
 
+exports.getDashboard = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+    const [
+      thisMonthSpend,
+      lastMonthSpend,
+      pendingCount,
+      supplies,
+      statusBreakdown,
+      monthlySeries,
+      topSuppliers,
+    ] = await Promise.all([
+      // This month RECEIVED total
+      Purchase.aggregate([
+        {
+          $match: {
+            tenant: tenantId,
+            status: "RECEIVED",
+            receivedAt: { $gte: thisMonthStart },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$total" } } },
+      ]),
+
+      // Last month RECEIVED total
+      Purchase.aggregate([
+        {
+          $match: {
+            tenant: tenantId,
+            status: "RECEIVED",
+            receivedAt: { $gte: lastMonthStart, $lt: thisMonthStart },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$total" } } },
+      ]),
+
+      // Pending to receive (CONFIRMED)
+      Purchase.countDocuments({ tenant: tenantId, status: "CONFIRMED" }),
+
+      // All active supplies for inventory value + low stock
+      Supply.find(
+        { tenant: tenantId, isActive: { $ne: false } },
+        { currentStock: 1, referenceCost: 1, minStock: 1 },
+      ).lean(),
+
+      // Status breakdown (excluding CANCELLED)
+      Purchase.aggregate([
+        { $match: { tenant: tenantId } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
+
+      // Monthly spend trend — last 6 months of RECEIVED purchases
+      Purchase.aggregate([
+        {
+          $match: {
+            tenant: tenantId,
+            status: "RECEIVED",
+            receivedAt: { $gte: sixMonthsAgo },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: "$receivedAt" },
+              month: { $month: "$receivedAt" },
+            },
+            total: { $sum: "$total" },
+          },
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } },
+      ]),
+
+      // Top 5 suppliers by RECEIVED spend (all time)
+      Purchase.aggregate([
+        { $match: { tenant: tenantId, status: "RECEIVED" } },
+        { $group: { _id: "$supplier", total: { $sum: "$total" } } },
+        { $sort: { total: -1 } },
+        { $limit: 5 },
+        {
+          $lookup: {
+            from: "clients",
+            localField: "_id",
+            foreignField: "_id",
+            as: "supplierData",
+          },
+        },
+        { $unwind: { path: "$supplierData", preserveNullAndEmpty: true } },
+        {
+          $project: {
+            supplierId: "$_id",
+            name: { $ifNull: ["$supplierData.company", "$supplierData.name", "Desconocido"] },
+            total: 1,
+          },
+        },
+      ]),
+    ]);
+
+    const inventoryValue = supplies.reduce(
+      (sum, s) => sum + (s.currentStock || 0) * (s.referenceCost || 0),
+      0,
+    );
+    const lowStockCount = supplies.filter(
+      (s) => s.minStock > 0 && s.currentStock <= s.minStock,
+    ).length;
+
+    const statusMap = {};
+    for (const row of statusBreakdown) statusMap[row._id] = row.count;
+
+    // Build full 6-month series filling gaps with 0
+    const monthLabels = [];
+    const monthTotals = [];
+    const spendByKey = {};
+    for (const row of monthlySeries) {
+      spendByKey[`${row._id.year}-${row._id.month}`] = row.total;
+    }
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      const label = d.toLocaleString("es-AR", { month: "short" });
+      monthLabels.push(label.charAt(0).toUpperCase() + label.slice(1));
+      monthTotals.push(spendByKey[key] || 0);
+    }
+
+    return res.json({
+      thisMonthSpend: thisMonthSpend[0]?.total || 0,
+      lastMonthSpend: lastMonthSpend[0]?.total || 0,
+      pendingCount,
+      inventoryValue,
+      lowStockCount,
+      statusBreakdown: statusMap,
+      trend: { labels: monthLabels, totals: monthTotals },
+      topSuppliers,
+    });
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener dashboard de compras");
+  }
+};
+
 const mapPurchaseWithRelations = async (tenantId, id) =>
   Purchase.findOne({ _id: id, tenant: tenantId })
     .populate("supplier", "name company phone taxId")
