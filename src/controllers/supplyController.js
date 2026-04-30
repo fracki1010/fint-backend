@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const { sendError, handleServerError } = require("../utils/http");
+const { notifyLowStock } = require("../utils/stockAlerts");
 
 const normalizeText = (value = "") =>
   value
@@ -165,6 +166,7 @@ exports.getSupplyMovements = async (req, res) => {
 
 exports.createSupplyMovement = async (req, res) => {
   const session = await mongoose.startSession();
+  let alertSupply = null;
 
   try {
     await session.withTransaction(async () => {
@@ -195,6 +197,17 @@ exports.createSupplyMovement = async (req, res) => {
 
       supply.currentStock = stockAfter;
       await supply.save({ session });
+
+      // Capture alert data if stock dropped below minimum
+      if (stockAfter < stockBefore && supply.minStock > 0 && stockAfter <= supply.minStock) {
+        alertSupply = {
+          _id: supply._id,
+          name: supply.name,
+          unit: supply.unit,
+          currentStock: stockAfter,
+          minStock: supply.minStock,
+        };
+      }
 
       const movement = await SupplyMovement.create(
         [
@@ -235,5 +248,10 @@ exports.createSupplyMovement = async (req, res) => {
     return handleServerError(res, error, "Error al registrar movimiento de insumo");
   } finally {
     await session.endSession();
+  }
+
+  // Fire-and-forget: notify after transaction commits
+  if (alertSupply && req.user?._id) {
+    notifyLowStock(req.user._id, alertSupply).catch(() => {});
   }
 };

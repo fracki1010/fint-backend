@@ -3,8 +3,10 @@ const mongoose = require("mongoose");
 const Recipe = require("../models/recipe.model");
 const Supply = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
+const ProductionLog = require("../models/productionLog.model");
 const Product = require("../models/product.model");
 const { sendError, handleServerError } = require("../utils/http");
+const { notifyLowStock } = require("../utils/stockAlerts");
 
 const POPULATE_RECIPE = [
   { path: "product", select: "name sku" },
@@ -174,6 +176,7 @@ exports.produceRecipe = async (req, res) => {
   const session = await mongoose.startSession();
   let result = null;
   let businessError = null;
+  const lowStockAlerts = [];
 
   try {
     await session.withTransaction(async () => {
@@ -233,6 +236,17 @@ exports.produceRecipe = async (req, res) => {
         supply.currentStock = stockAfter;
         await supply.save({ session });
 
+        // Collect supplies that dropped below minimum
+        if (supply.minStock > 0 && stockAfter <= supply.minStock) {
+          lowStockAlerts.push({
+            _id: supply._id,
+            name: supply.name,
+            unit: supply.unit,
+            currentStock: stockAfter,
+            minStock: supply.minStock,
+          });
+        }
+
         await SupplyMovement.create(
           [
             {
@@ -262,10 +276,27 @@ exports.produceRecipe = async (req, res) => {
         );
       }
 
+      const unitsProduced = recipe.yieldQuantity * batches;
+
+      await ProductionLog.create(
+        [
+          {
+            tenant: tenantId,
+            recipe: recipe._id,
+            recipeName: recipe.name,
+            batchesProduced: batches,
+            unitsProduced,
+            notes,
+            producedBy: req.user?._id || null,
+          },
+        ],
+        { session },
+      );
+
       result = {
         recipe: { _id: recipe._id, name: recipe.name },
         batchesProduced: batches,
-        unitsProduced: recipe.yieldQuantity * batches,
+        unitsProduced,
         ingredientsUsed: recipe.ingredients.length,
       };
     });
@@ -276,5 +307,49 @@ exports.produceRecipe = async (req, res) => {
     await session.endSession();
   }
 
+  // Fire-and-forget alerts after transaction commits
+  if (req.user?._id && lowStockAlerts.length > 0) {
+    for (const supply of lowStockAlerts) {
+      notifyLowStock(req.user._id, supply).catch(() => {});
+    }
+  }
+
   return res.json(result);
+};
+
+exports.getProductionLogs = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const recipeId = req.query.recipeId;
+
+    const filter = { tenant: tenantId };
+    if (recipeId) filter.recipe = recipeId;
+
+    const logs = await ProductionLog.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip((page - 1) * limit);
+
+    return res.json(logs);
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener historial de producción");
+  }
+};
+
+exports.getRecipeProductionLogs = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const logs = await ProductionLog.find({
+      tenant: tenantId,
+      recipe: req.params.id,
+    })
+      .sort({ createdAt: -1 })
+      .limit(30);
+
+    return res.json(logs);
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener historial de la receta");
+  }
 };
