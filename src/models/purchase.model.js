@@ -24,7 +24,7 @@ const purchaseSchema = new mongoose.Schema(
     },
     supplier: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Client",
+      ref: "Supplier",
       required: true,
     },
     date: { type: String, required: true },
