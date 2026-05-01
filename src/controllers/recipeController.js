@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 const Recipe = require("../models/recipe.model");
-const Supply = require("../models/supply.model");
+const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const ProductionLog = require("../models/productionLog.model");
 const { Product } = require("../models/product.model");
@@ -266,12 +266,21 @@ exports.produceRecipe = async (req, res) => {
         );
       }
 
-      // If linked to a product, increase its stock
+      // If linked to a product, increase its stock and update costPrice
       if (recipe.product) {
         const unitsProduced = recipe.yieldQuantity * batches;
+        const totalIngredientCost = recipe.ingredients.reduce((sum, ing) => {
+          const cost = ing.supply?.referenceCost ?? 0;
+          return sum + ing.quantity * cost;
+        }, 0);
+        const costPerUnit = recipe.yieldQuantity > 0 ? totalIngredientCost / recipe.yieldQuantity : 0;
+
+        const updatePayload = { $inc: { stock: unitsProduced } };
+        if (costPerUnit > 0) updatePayload.$set = { costPrice: costPerUnit };
+
         await Product.findOneAndUpdate(
           { _id: recipe.product, tenant: tenantId },
-          { $inc: { stock: unitsProduced } },
+          updatePayload,
           { session },
         );
       }

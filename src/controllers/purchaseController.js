@@ -91,7 +91,7 @@ exports.getDashboard = async (req, res) => {
         { $limit: 5 },
         {
           $lookup: {
-            from: "clients",
+            from: "suppliers",
             localField: "_id",
             foreignField: "_id",
             as: "supplierData",
@@ -298,25 +298,39 @@ exports.receivePurchase = async (req, res) => {
         );
       }
 
-      if (purchase.paymentCondition === "CREDIT") {
-        await SupplierAccountEntry.create(
-          [
-            {
-              tenant: tenantId,
-              supplier: purchase.supplier,
-              date: purchase.date,
-              type: "CHARGE",
-              amount: purchase.total,
-              sign: 1,
-              purchase: purchase._id,
-              reference: `Compra ${purchase._id}`,
-              notes: "Cargo automático por compra a crédito",
-              createdBy: req.user?._id,
-            },
-          ],
-          { session },
-        );
+      const accountEntries = [
+        {
+          tenant: tenantId,
+          supplier: purchase.supplier,
+          date: purchase.date,
+          type: "CHARGE",
+          amount: purchase.total,
+          sign: 1,
+          purchase: purchase._id,
+          reference: `Compra ${purchase._id}`,
+          notes: purchase.paymentCondition === "CREDIT"
+            ? "Cargo automático por compra a crédito"
+            : "Cargo automático por compra al contado",
+          createdBy: req.user?._id,
+        },
+      ];
+
+      if (purchase.paymentCondition === "CASH") {
+        accountEntries.push({
+          tenant: tenantId,
+          supplier: purchase.supplier,
+          date: purchase.date,
+          type: "PAYMENT",
+          amount: purchase.total,
+          sign: -1,
+          purchase: purchase._id,
+          reference: `Compra ${purchase._id}`,
+          notes: "Pago automático por compra al contado",
+          createdBy: req.user?._id,
+        });
       }
+
+      await SupplierAccountEntry.create(accountEntries, { session });
 
       purchase.status = "RECEIVED";
       purchase.receivedAt = new Date();

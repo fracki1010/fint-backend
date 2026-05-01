@@ -4,10 +4,65 @@ const { Product } = require("../models/product.model");
 const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
 const IdempotencyKey = require("../models/idempotencyKey.model");
+const ClientAccountEntry = require("../models/clientAccountEntry.model");
 const {
   createAndDispatchNotification,
 } = require("../services/notificationService");
 const { HttpError, sendError, handleServerError } = require("../utils/http");
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+const REVERSAL_TYPE = { CHARGE: "CREDIT_NOTE", PAYMENT: "DEBIT_NOTE", CREDIT_NOTE: "CHARGE", DEBIT_NOTE: "PAYMENT" };
+const REVERSAL_SIGN = { CHARGE: -1, PAYMENT: 1, CREDIT_NOTE: 1, DEBIT_NOTE: -1 };
+
+const createAccountCharge = async ({ tenantId, clientId, orderId, amount, actorUserId, session }) => {
+  if (!clientId || !amount) return;
+  await ClientAccountEntry.create([{
+    tenant: tenantId,
+    client: clientId,
+    date: todayISO(),
+    type: "CHARGE",
+    amount,
+    sign: 1,
+    order: orderId,
+    notes: "Cargo automático por venta",
+    createdBy: actorUserId || null,
+  }], { session });
+};
+
+const createAccountPayment = async ({ tenantId, clientId, orderId, amount, actorUserId, session }) => {
+  if (!clientId || !amount) return;
+  const existing = await ClientAccountEntry.findOne({ tenant: tenantId, order: orderId, type: "PAYMENT" }).session(session);
+  if (existing) return;
+  await ClientAccountEntry.create([{
+    tenant: tenantId,
+    client: clientId,
+    date: todayISO(),
+    type: "PAYMENT",
+    amount,
+    sign: -1,
+    order: orderId,
+    notes: "Cobro automático por venta pagada",
+    createdBy: actorUserId || null,
+  }], { session });
+};
+
+const reverseOrderAccountEntries = async ({ tenantId, orderId, actorUserId, session }) => {
+  const entries = await ClientAccountEntry.find({ tenant: tenantId, order: orderId }).session(session);
+  if (!entries.length) return;
+  const reversals = entries.map((e) => ({
+    tenant: tenantId,
+    client: e.client,
+    date: todayISO(),
+    type: REVERSAL_TYPE[e.type] || "CREDIT_NOTE",
+    amount: e.amount,
+    sign: REVERSAL_SIGN[e.type] ?? -1,
+    order: orderId,
+    notes: `Reversión automática por cancelación`,
+    createdBy: actorUserId || null,
+  }));
+  await ClientAccountEntry.create(reversals, { session });
+};
 
 const deriveLegacyStatus = ({
   salesStatus,
@@ -450,6 +505,14 @@ exports.createOrder = async (req, res) => {
     }
 
     await newOrder.save({ session });
+
+    if (newOrder.client && newOrder.totalAmount > 0 && newOrder.salesStatus !== "Cancelada") {
+      await createAccountCharge({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, actorUserId, session });
+      if (newOrder.paymentStatus === "Pagado") {
+        await createAccountPayment({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, actorUserId, session });
+      }
+    }
+
     if (idempotencyKey) {
       await IdempotencyKey.create(
         [
@@ -574,6 +637,7 @@ exports.updateOrder = async (req, res) => {
 
     const previousDeliveryStatus = order.deliveryStatus || "Pendiente";
     const previousSalesStatus = order.salesStatus || "Pendiente";
+    const previousPaymentStatus = order.paymentStatus || "Pendiente";
 
     Object.assign(order, buildStatePatch(req.body, order));
 
@@ -639,6 +703,18 @@ exports.updateOrder = async (req, res) => {
     }
 
     await order.save({ session });
+
+    if (order.client && order.totalAmount > 0) {
+      const justPaid = order.paymentStatus === "Pagado" && previousPaymentStatus !== "Pagado" && previousSalesStatus !== "Cancelada";
+      const justCancelled = order.salesStatus === "Cancelada" && previousSalesStatus !== "Cancelada";
+
+      if (justCancelled) {
+        await reverseOrderAccountEntries({ tenantId, orderId: order._id, actorUserId, session });
+      } else if (justPaid) {
+        await createAccountPayment({ tenantId, clientId: order.client, orderId: order._id, amount: order.totalAmount, actorUserId, session });
+      }
+    }
+
     if (idempotencyKey) {
       await IdempotencyKey.create(
         [
@@ -777,6 +853,7 @@ exports.deleteOrder = async (req, res) => {
       }
 
       await order.save({ session });
+      await reverseOrderAccountEntries({ tenantId, orderId: order._id, actorUserId, session });
     }
     if (idempotencyKey) {
       await IdempotencyKey.create(
