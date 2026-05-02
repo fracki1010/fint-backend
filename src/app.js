@@ -47,6 +47,11 @@ function createApp(options = {}) {
   );
   app.use("/api/dashboard", authMiddleware, require("./routes/dashboardRoutes"));
   app.use("/api/financial", authMiddleware, roleMiddleware.requireRole("admin", "contabilidad"), require("./routes/financialRoutes"));
+  app.post(
+    "/api/whatsapp/webhook/message",
+    express.json({ limit: "25mb" }),
+    require("./controllers/whatsappController").handleWebhook,
+  );
   app.use("/api/whatsapp", authMiddleware, roleMiddleware.requireRole("admin"), require("./routes/whatsappRoutes"));
   app.use("/api/supplies", authMiddleware, require("./routes/supplyRoutes"));
   app.use("/api/purchases", authMiddleware, require("./routes/purchaseRoutes"));

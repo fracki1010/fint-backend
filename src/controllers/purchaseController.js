@@ -97,11 +97,11 @@ exports.getDashboard = async (req, res) => {
             as: "supplierData",
           },
         },
-        { $unwind: { path: "$supplierData", preserveNullAndEmpty: true } },
+        { $unwind: { path: "$supplierData", preserveNullAndEmptyArrays: true } },
         {
           $project: {
             supplierId: "$_id",
-            name: { $ifNull: ["$supplierData.company", "$supplierData.name", "Desconocido"] },
+            name: { $ifNull: [{ $ifNull: ["$supplierData.company", "$supplierData.name"] }, "Desconocido"] },
             total: 1,
           },
         },

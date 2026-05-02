@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
+    "start:worker": "node whatsapp-worker/server.js",
     "dev": "nodemon server.js",
+    "dev:worker": "nodemon whatsapp-worker/server.js",
     "lint": "node scripts/check-syntax.cjs",
     "smoke": "node scripts/smoke.cjs",
     "ci": "npm run lint && npm run test && npm run smoke",

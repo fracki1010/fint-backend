@@ -1,0 +1,33 @@
+services:
+  api:
+    build: .
+    ports:
+      - "5000:5000"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # Apunta al worker por nombre de servicio (red interna Docker)
+      WORKER_URL: http://whatsapp-worker:3001
+    volumes:
+      - uploads:/app/temp
+    restart: unless-stopped
+    depends_on:
+      - whatsapp-worker
+
+  whatsapp-worker:
+    build: .
+    command: node whatsapp-worker/server.js
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # Apunta al api por nombre de servicio (red interna Docker)
+      BACKEND_WEBHOOK_URL: http://api:5000/api/whatsapp/webhook/message
+    volumes:
+      - wwebjs-auth:/app/.wwebjs_auth
+      - wwebjs-cache:/app/.wwebjs_cache
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  wwebjs-auth:
+  wwebjs-cache:
