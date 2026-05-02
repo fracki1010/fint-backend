@@ -780,23 +780,34 @@ exports.getProductAnalysis = async (req, res) => {
     );
     const salesDistribution = calculateCategoryRevenue(scopedOrders).slice(0, 3);
 
-    const topProducts = Array.from(productStats.values())
-      .map((item) => {
-        const profit = item.revenue - item.cogs;
-        const netMargin = item.revenue > 0 ? (profit / item.revenue) * 100 : 0;
-        const roi = item.cogs > 0 ? profit / item.cogs : 0;
+    const allProductStats = Array.from(productStats.values()).map((item) => {
+      const profit = item.revenue - item.cogs;
+      const netMargin = item.revenue > 0 ? (profit / item.revenue) * 100 : 0;
+      const roi = item.cogs > 0 ? profit / item.cogs : 0;
+      return {
+        name: item.name,
+        category: item.category,
+        netMargin,
+        roi,
+        volume: item.quantity,
+        status: roi >= 8 ? "Optimo" : roi >= 3 ? "Escalando" : "Revisar",
+      };
+    });
 
-        return {
-          name: item.name,
-          category: item.category,
-          netMargin,
-          roi,
-          volume: item.quantity,
-          status: roi >= 8 ? "Optimo" : roi >= 3 ? "Escalando" : "Revisar",
-        };
-      })
-      .sort((a, b) => b.roi - a.roi)
-      .slice(0, 10);
+    const topProducts = [...allProductStats].sort((a, b) => b.roi - a.roi).slice(0, 10);
+
+    const totalQuantity = allProductStats.reduce((sum, p) => sum + p.volume, 0);
+    const avgMargin =
+      allProductStats.length > 0
+        ? allProductStats.reduce((sum, p) => sum + p.netMargin, 0) / allProductStats.length
+        : 0;
+    const stockRotation = products.length > 0 ? totalQuantity / products.length : 0;
+
+    const kpis = {
+      stockRotation: Math.round(stockRotation * 10) / 10,
+      avgMargin: Math.round(avgMargin * 10) / 10,
+      activeSkus: products.length,
+    };
 
     return res.json({
       generatedAt: now,
@@ -805,6 +816,8 @@ exports.getProductAnalysis = async (req, res) => {
       salesDistribution,
       heatmap,
       topProducts,
+      allProducts: allProductStats,
+      kpis,
     });
   } catch (error) {
     return handleServerError(res, error, "Error al obtener product analysis");
