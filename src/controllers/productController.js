@@ -79,6 +79,7 @@ const buildProductPayload = async (tenantId, payload, currentProductId = null) =
   return {
     tenant: tenantId,
     sku,
+    barcode: payload.barcode?.toString().trim() || undefined,
     name,
     description: payload.description?.toString().trim() || undefined,
     price: payload.price,
@@ -91,6 +92,69 @@ const buildProductPayload = async (tenantId, payload, currentProductId = null) =
     isActive: true,
     deletedAt: null,
   };
+};
+
+// Buscar productos por código de barras, SKU o nombre
+exports.lookupProductByCode = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const { code } = req.params;
+    const normalizedCode = code.toString().trim().toUpperCase();
+    const MAX_RESULTS = 10;
+
+    const activeFilter = { tenant: tenantId, isActive: { $ne: false } };
+
+    // 1. Barcode exacto (prioridad máxima)
+    const barcodeExact = await Product.find({
+      ...activeFilter,
+      barcode: normalizedCode,
+    }).limit(MAX_RESULTS);
+
+    // 2. SKU exacto
+    const skuExact = await Product.find({
+      ...activeFilter,
+      sku: normalizedCode,
+    }).limit(MAX_RESULTS);
+
+    // 3. Búsqueda general: barcode, SKU o nombre que contenga el texto
+    const general = await Product.find({
+      ...activeFilter,
+      $or: [
+        { barcode: { $regex: normalizedCode, $options: "i" } },
+        { sku: { $regex: normalizedCode, $options: "i" } },
+        { name: { $regex: normalizedCode, $options: "i" } },
+      ],
+    }).limit(MAX_RESULTS);
+
+    // Combinar resultados sin duplicados, priorizando exactos
+    const seen = new Set();
+    const products = [];
+
+    const addUnique = (arr) => {
+      for (const p of arr) {
+        if (!seen.has(p._id.toString())) {
+          seen.add(p._id.toString());
+          products.push(p);
+        }
+      }
+    };
+
+    addUnique(barcodeExact);
+    addUnique(skuExact);
+    addUnique(general);
+
+    if (products.length === 0) {
+      return sendError(res, {
+        status: 404,
+        code: "PRODUCT_NOT_FOUND",
+        message: "No se encontraron productos",
+      });
+    }
+
+    res.json({ products });
+  } catch (error) {
+    return handleServerError(res, error, "Error al buscar producto");
+  }
 };
 
 // Obtener todos los productos
@@ -169,18 +233,27 @@ exports.createProduct = async (req, res) => {
     const normalizedSku = sku?.trim() ? normalizeSku(sku) : null;
     const normalizedCategories = normalizeCategories(categories, category);
 
+    const normalizedBarcode = req.body.barcode?.toString().trim().toUpperCase();
+
     const existingProduct = await Product.findOne({
       tenant: tenantId,
       $or: [
         { name: normalizedName },
         ...(normalizedSku ? [{ sku: normalizedSku }] : []),
+        ...(normalizedBarcode ? [{ barcode: normalizedBarcode }] : []),
       ],
     });
     if (existingProduct) {
+      const reason =
+        existingProduct.name === normalizedName
+          ? "nombre"
+          : existingProduct.sku === normalizedSku
+            ? "SKU"
+            : "código de barras";
       return sendError(res, {
         status: 409,
         code: "PRODUCT_ALREADY_EXISTS",
-        message: "Ya existe un producto con este nombre o SKU",
+        message: `Ya existe un producto con ese ${reason}`,
       });
     }
 
@@ -228,17 +301,29 @@ exports.updateProduct = async (req, res) => {
       ? normalizeSku(req.body.sku)
       : existingProduct.sku;
 
+    const nextBarcode = req.body.barcode?.toString().trim().toUpperCase();
+
     const duplicated = await Product.findOne({
       tenant: tenantId,
       _id: { $ne: req.params.id },
-      $or: [{ name: nextName }, ...(nextSku ? [{ sku: nextSku }] : [])],
+      $or: [
+        { name: nextName },
+        ...(nextSku ? [{ sku: nextSku }] : []),
+        ...(nextBarcode ? [{ barcode: nextBarcode }] : []),
+      ],
     });
 
     if (duplicated) {
+      const reason =
+        duplicated.name === nextName
+          ? "nombre"
+          : duplicated.sku === nextSku
+            ? "SKU"
+            : "código de barras";
       return sendError(res, {
         status: 409,
         code: "PRODUCT_ALREADY_EXISTS",
-        message: "Ya existe un producto con este nombre o SKU",
+        message: `Ya existe un producto con ese ${reason}`,
       });
     }
 

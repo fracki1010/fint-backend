@@ -64,6 +64,7 @@ const updateClientBody = z.object(clientPayloadBase);
 
 const productPayloadBase = {
   sku: z.string().trim().optional(),
+  barcode: z.string().trim().optional(),
   name: z.string().trim().min(1, "Nombre requerido").optional(),
   description: z.string().trim().optional(),
   price: z.coerce.number().min(0, "Precio inválido").optional(),

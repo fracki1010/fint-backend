@@ -29,6 +29,37 @@ const buildClientMetrics = (orders) => {
   };
 };
 
+const GENERIC_CLIENT_NAME = "Consumidor Final";
+const GENERIC_CLIENT_PHONE = "0000000000";
+
+exports.getOrCreateGenericClient = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+
+    let client = await Client.findOne({
+      tenant: tenantId,
+      name: GENERIC_CLIENT_NAME,
+      isActive: { $ne: false },
+    });
+
+    if (!client) {
+      client = new Client({
+        tenant: tenantId,
+        name: GENERIC_CLIENT_NAME,
+        phone: GENERIC_CLIENT_PHONE,
+        taxId: "",
+        isActive: true,
+        debt: 0,
+      });
+      await client.save();
+    }
+
+    res.json({ client });
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener cliente genérico");
+  }
+};
+
 // Obtener todos los clientes
 exports.getClients = async (req, res) => {
   try {

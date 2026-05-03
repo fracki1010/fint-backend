@@ -11,6 +11,10 @@ const {
 
 router.get("/", validateRequest({ query: includeInactiveQuery }), productController.getProducts);
 router.get(
+  "/lookup/:code",
+  productController.lookupProductByCode,
+);
+router.get(
   "/:id",
   validateRequest({ params: idParam, query: includeInactiveQuery }),
   productController.getProductById,

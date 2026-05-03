@@ -64,6 +64,12 @@ function createApp(options = {}) {
   app.use("/api/team", authMiddleware, require("./routes/teamRoutes"));
   app.use("/api/notifications", require("./routes/notificationRoutes"));
   app.use("/api/audit-logs", authMiddleware, require("./routes/auditLogRoutes"));
+  app.use(
+    "/api/export",
+    authMiddleware,
+    roleMiddleware.requireRole("admin", "contabilidad"),
+    require("./routes/exportRoutes"),
+  );
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "OK", message: "Servidor y Bot funcionando" });

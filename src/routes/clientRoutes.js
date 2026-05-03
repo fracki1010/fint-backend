@@ -10,6 +10,7 @@ const {
   includeInactiveQuery,
 } = require("../validators/schemas");
 
+router.get("/generic", clientController.getOrCreateGenericClient);
 router.get("/", validateRequest({ query: includeInactiveQuery }), clientController.getClients);
 router.get(
   "/:id",

@@ -22,6 +22,7 @@ const productSchema = new mongoose.Schema(
       required: true,
     },
     sku: { type: String, sparse: true },
+    barcode: { type: String, sparse: true },
     name: { type: String, required: true },
     description: { type: String },
     price: { type: Number, required: true }, // Precio de venta sugerido
@@ -39,6 +40,7 @@ const productSchema = new mongoose.Schema(
 
 productSchema.index({ tenant: 1, name: 1 }, { unique: true });
 productSchema.index({ tenant: 1, sku: 1 }, { unique: true, sparse: true });
+productSchema.index({ tenant: 1, barcode: 1 }, { unique: true, sparse: true });
 
 module.exports = {
   Product: mongoose.model("Product", productSchema),
