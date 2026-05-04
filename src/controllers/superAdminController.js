@@ -243,17 +243,29 @@ const createTenant = async (req, res) => {
       isActive: true,
     });
 
-    // Send welcome email if requested
+    // Send welcome email if requested (best-effort, don't break tenant creation)
+    let emailSent = false;
+    let emailError = null;
     if (sendWelcomeEmail) {
-      const { subject, html, text } = buildWelcomeEmail({
-        businessName,
-        adminName,
-        email: adminEmail,
-        tempPassword: passwordType === "auto" ? tempPassword : undefined,
-        plan,
-        trialEndsAt: tenant.trialEndsAt,
-      });
-      await sendEmail({ to: adminEmail, subject, html, text });
+      try {
+        const { subject, html, text } = buildWelcomeEmail({
+          businessName,
+          adminName,
+          email: adminEmail,
+          tempPassword: passwordType === "auto" ? tempPassword : undefined,
+          plan,
+          trialEndsAt: tenant.trialEndsAt,
+        });
+        console.log("[SUPERADMIN] Attempting to send welcome email to:", adminEmail);
+        const result = await sendEmail({ to: adminEmail, subject, html, text });
+        emailSent = true;
+        console.log("[SUPERADMIN] Welcome email sent successfully:", result.messageId);
+      } catch (err) {
+        emailError = err.message;
+        console.error("[SUPERADMIN] Welcome email failed:", err.message);
+        console.error("[SUPERADMIN] SMTP_HOST:", process.env.SMTP_HOST || "NOT SET");
+        console.error("[SUPERADMIN] EMAIL_FROM:", process.env.EMAIL_FROM || "NOT SET");
+      }
     }
 
     // Create audit log
@@ -274,7 +286,9 @@ const createTenant = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Tenant creado exitosamente",
+      message: emailError
+        ? "Tenant creado exitosamente, pero no se pudo enviar el email de bienvenida."
+        : "Tenant creado exitosamente",
       tenant,
       adminUser: {
         _id: adminUser._id,
@@ -285,6 +299,8 @@ const createTenant = async (req, res) => {
         email: adminEmail,
         tempPassword: passwordType === "auto" ? tempPassword : undefined,
       },
+      emailSent,
+      emailError: emailError || undefined,
     });
   } catch (error) {
     return handleServerError(res, error, "Error al crear tenant");

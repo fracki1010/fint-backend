@@ -1,6 +1,11 @@
 const nodemailer = require("nodemailer");
 const { logError } = require("../utils/logger");
 
+// Cargar dotenv como fallback por si el entry point no lo hizo
+if (!process.env.SMTP_HOST) {
+  require("dotenv").config();
+}
+
 const isProduction = () => process.env.NODE_ENV === "production";
 
 function getTransporter() {
@@ -120,10 +125,14 @@ async function sendEmail({ to, subject, html, text }) {
   const transporter = getTransporter();
 
   if (!transporter) {
-    console.log("[EMAIL] No SMTP configured. Email would be sent to:", to);
-    console.log("[EMAIL] Subject:", subject);
-    console.log("[EMAIL] Text preview:", text?.slice(0, 200));
-    return { success: true, message: "Email logged to console (no SMTP configured)" };
+    const reason = [
+      !process.env.SMTP_HOST && "SMTP_HOST missing",
+      !process.env.SMTP_USER && "SMTP_USER missing",
+      !process.env.SMTP_PASS && "SMTP_PASS missing",
+    ].filter(Boolean).join(", ");
+    console.log("[EMAIL] No SMTP configured:", reason || "unknown");
+    console.log("[EMAIL] Email would be sent to:", to, "| Subject:", subject);
+    throw new Error(`SMTP not configured: ${reason}`);
   }
 
   try {
@@ -135,11 +144,11 @@ async function sendEmail({ to, subject, html, text }) {
       html,
     });
 
-    console.log("[EMAIL] Sent:", info.messageId);
+    console.log("[EMAIL] Sent:", info.messageId, "to:", to);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    logError("email_send_failed", { to, subject, error: error.message });
-    console.error("[EMAIL] Failed to send:", error.message);
+    logError("email_send_failed", { to, subject, error: error.message, code: error.code });
+    console.error("[EMAIL] Failed to send:", error.message, "| Code:", error.code);
     throw error;
   }
 }
