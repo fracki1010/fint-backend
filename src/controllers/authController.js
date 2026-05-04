@@ -19,19 +19,34 @@ const generateToken = (userId) => {
   });
 };
 
-const toAuthResponse = (user) => ({
-  token: generateToken(user._id.toString()),
-  user: {
-    _id: user._id,
-    fullName: user.fullName,
-    email: user.email,
-    role: user.role || "admin",
-    isActive: user.isActive,
-    isSuperAdmin: user.isSuperAdmin,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-  },
-});
+const toAuthResponse = async (user) => {
+  const tenant = await Tenant.findById(user.tenant).lean();
+  return {
+    token: generateToken(user._id.toString()),
+    user: {
+      _id: user._id,
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role || "admin",
+      isActive: user.isActive,
+      isSuperAdmin: user.isSuperAdmin,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      tenant: tenant
+        ? {
+            _id: tenant._id,
+            name: tenant.name,
+            plan: tenant.plan,
+            status: tenant.status,
+            limits: tenant.limits,
+            enabledFeatures: tenant.enabledFeatures,
+            usage: tenant.usage,
+            trialEndsAt: tenant.trialEndsAt,
+          }
+        : null,
+    },
+  };
+};
 
 const createUserInternal = async ({
   fullName,
@@ -116,7 +131,7 @@ exports.login = async (req, res) => {
     user.lastLoginAt = new Date();
     await user.save();
 
-    return res.json(toAuthResponse(user));
+    return res.json(await toAuthResponse(user));
   } catch (error) {
     return handleServerError(res, error, "Error al iniciar sesion");
   }
@@ -124,6 +139,7 @@ exports.login = async (req, res) => {
 
 exports.me = async (req, res) => {
   const u = req.user;
+  const tenant = await Tenant.findById(u.tenant).lean();
   return res.json({
     user: {
       _id: u._id,
@@ -134,6 +150,18 @@ exports.me = async (req, res) => {
       isSuperAdmin: u.isSuperAdmin,
       createdAt: u.createdAt,
       updatedAt: u.updatedAt,
+      tenant: tenant
+        ? {
+            _id: tenant._id,
+            name: tenant.name,
+            plan: tenant.plan,
+            status: tenant.status,
+            limits: tenant.limits,
+            enabledFeatures: tenant.enabledFeatures,
+            usage: tenant.usage,
+            trialEndsAt: tenant.trialEndsAt,
+          }
+        : null,
     },
   });
 };
@@ -186,7 +214,7 @@ exports.bootstrapSuperAdmin = async (req, res) => {
       storeName,
     });
 
-    return res.status(201).json(toAuthResponse(user));
+    return res.status(201).json(await toAuthResponse(user));
   } catch (error) {
     return handleServerError(
       res,

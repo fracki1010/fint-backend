@@ -40,6 +40,7 @@ function createApp(options = {}) {
   app.use("/api/products", authMiddleware, require("./routes/productRoutes"));
   app.use("/api/orders", authMiddleware, require("./routes/orderRoutes"));
   app.use("/api/settings", authMiddleware, require("./routes/settingRoutes"));
+  app.use("/api/tenant", authMiddleware, require("./routes/tenantRoutes"));
   app.use(
     "/api/stock-movements",
     authMiddleware,
@@ -70,6 +71,14 @@ function createApp(options = {}) {
     roleMiddleware.requireRole("admin", "contabilidad"),
     require("./routes/exportRoutes"),
   );
+  app.use(
+    "/api/superadmin",
+    authMiddleware,
+    require("./routes/superAdminRoutes"),
+  );
+  app.use("/api/payments", authMiddleware, require("./routes/paymentRoutes"));
+  // Webhook de pagos no requiere auth (viene de MercadoPago)
+  app.post("/api/payments/webhook", express.json(), require("./controllers/paymentController").webhook);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "OK", message: "Servidor y Bot funcionando" });

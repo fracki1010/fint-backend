@@ -4,6 +4,7 @@ const connectDB = require("./src/config/db"); // 👈 1. Importamos la conexión
 const { createApp } = require("./src/app");
 const { validateRuntimeConfig } = require("./src/config/runtime");
 const { logInfo } = require("./src/utils/logger");
+const { verifyEmailConnection } = require("./src/services/emailService");
 // const { initializeWhatsApp } = require("./src/services/whatsappService"); // Comentado para evitar levantar WhatsApp al iniciar el servidor
 
 const PORT = process.env.PORT || 5000;
@@ -18,4 +19,5 @@ connectDB();
 
 app.listen(PORT, () => {
   logInfo("server_started", { port: Number(PORT) });
+  verifyEmailConnection();
 });

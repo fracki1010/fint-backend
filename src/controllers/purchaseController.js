@@ -22,6 +22,7 @@ exports.getDashboard = async (req, res) => {
       statusBreakdown,
       monthlySeries,
       topSuppliers,
+      payablesRaw,
     ] = await Promise.all([
       // This month RECEIVED total
       Purchase.aggregate([
@@ -106,6 +107,12 @@ exports.getDashboard = async (req, res) => {
           },
         },
       ]),
+
+      // Total accounts payable (supplier balance)
+      SupplierAccountEntry.aggregate([
+        { $match: { tenant: tenantId } },
+        { $group: { _id: null, balance: { $sum: { $multiply: ["$amount", "$sign"] } } } },
+      ]),
     ]);
 
     const inventoryValue = supplies.reduce(
@@ -134,12 +141,15 @@ exports.getDashboard = async (req, res) => {
       monthTotals.push(spendByKey[key] || 0);
     }
 
+    const totalPayables = Math.max(0, payablesRaw[0]?.balance || 0);
+
     return res.json({
       thisMonthSpend: thisMonthSpend[0]?.total || 0,
       lastMonthSpend: lastMonthSpend[0]?.total || 0,
       pendingCount,
       inventoryValue,
       lowStockCount,
+      totalPayables,
       statusBreakdown: statusMap,
       trend: { labels: monthLabels, totals: monthTotals },
       topSuppliers,

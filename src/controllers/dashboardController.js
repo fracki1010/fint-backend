@@ -1,6 +1,9 @@
 const Client = require("../models/client.model");
 const Order = require("../models/order.model");
 const { Product } = require("../models/product.model");
+const { Supply } = require("../models/supply.model");
+const Purchase = require("../models/purchase.model");
+const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
 const InventorySnapshot = require("../models/inventorySnapshot.model");
 const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
@@ -105,6 +108,9 @@ exports.getSummary = async (req, res) => {
       productsForCostRaw,
       ordersForUniversalKpisRaw,
       clientFirstPurchaseRaw,
+      suppliesRaw,
+      supplierBalanceRaw,
+      lastReceivedPurchaseRaw,
     ] = await Promise.all([
       Order.aggregate([
         {
@@ -250,6 +256,19 @@ exports.getSummary = async (req, res) => {
           },
         },
       ]),
+      Supply.find({ tenant: tenantId, isActive: { $ne: false } })
+        .select("name sku currentStock minStock unit")
+        .sort({ name: 1 })
+        .lean(),
+      SupplierAccountEntry.aggregate([
+        { $match: { tenant: tenantId } },
+        { $group: { _id: null, balance: { $sum: { $multiply: ["$amount", "$sign"] } } } },
+      ]),
+      Purchase.findOne({ tenant: tenantId, status: "RECEIVED" })
+        .sort({ receivedAt: -1 })
+        .populate("supplier", "name company")
+        .select("supplier total receivedAt items")
+        .lean(),
     ]);
 
     const lowStockCandidates = activeProducts.filter(
@@ -386,6 +405,34 @@ exports.getSummary = async (req, res) => {
       }
     });
 
+    // ── Purchasing data ──────────────────────────────────────────────
+    const lowStockSupplies = (suppliesRaw || [])
+      .filter((s) => (s.currentStock || 0) <= (s.minStock || 0))
+      .slice(0, 5)
+      .map((s) => ({
+        _id: s._id,
+        name: s.name,
+        sku: s.sku || null,
+        currentStock: s.currentStock || 0,
+        minStock: s.minStock || 0,
+        unit: s.unit || "unidad",
+      }));
+
+    const totalPayables = roundTo(supplierBalanceRaw[0]?.balance || 0);
+
+    const lastReceivedPurchase = lastReceivedPurchaseRaw
+      ? {
+          _id: lastReceivedPurchaseRaw._id,
+          supplierName:
+            typeof lastReceivedPurchaseRaw.supplier === "object" && lastReceivedPurchaseRaw.supplier
+              ? lastReceivedPurchaseRaw.supplier.company || lastReceivedPurchaseRaw.supplier.name || "Proveedor"
+              : "Proveedor",
+          total: lastReceivedPurchaseRaw.total || 0,
+          itemCount: (lastReceivedPurchaseRaw.items || []).length,
+          receivedAt: lastReceivedPurchaseRaw.receivedAt,
+        }
+      : null;
+
     return res.json({
       generatedAt: now,
       sales: {
@@ -458,6 +505,12 @@ exports.getSummary = async (req, res) => {
       }),
       recentOrders,
       recentMovements,
+      purchasing: {
+        lowStockSupplies,
+        lowStockSuppliesCount: lowStockSupplies.length,
+        totalPayables,
+        lastReceivedPurchase,
+      },
     });
   } catch (error) {
     return handleServerError(
@@ -713,6 +766,66 @@ exports.getOptionalKpis = async (req, res) => {
       error,
       "Error al obtener metricas opcionales del dashboard",
     );
+  }
+};
+
+exports.getDailySales = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const days = Math.min(Math.max(parseInt(req.query.days) || 14, 1), 90);
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days + 1);
+    startDate.setHours(0, 0, 0, 0);
+
+    const sales = await Order.aggregate([
+      {
+        $match: {
+          tenant: tenantId,
+          createdAt: { $gte: startDate },
+          salesStatus: { $ne: "Cancelada" },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" },
+            day: { $dayOfMonth: "$createdAt" },
+          },
+          revenue: { $sum: "$totalAmount" },
+          orders: { $sum: 1 },
+          averageTicket: { $avg: "$totalAmount" },
+        },
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } },
+    ]);
+
+    // Fill in missing days with zeroes
+    const result = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+
+      const dayData = sales.find(
+        (s) =>
+          s._id.year === d.getFullYear() &&
+          s._id.month === d.getMonth() + 1 &&
+          s._id.day === d.getDate(),
+      );
+
+      result.push({
+        date: d.toISOString().slice(0, 10),
+        revenue: dayData?.revenue || 0,
+        orders: dayData?.orders || 0,
+        averageTicket: dayData?.averageTicket || 0,
+      });
+    }
+
+    return res.json({ success: true, sales: result, days });
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener ventas diarias");
   }
 };
 

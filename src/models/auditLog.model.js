@@ -2,33 +2,64 @@ const mongoose = require("mongoose");
 
 const auditLogSchema = new mongoose.Schema(
   {
+    action: {
+      type: String,
+      required: true,
+      enum: [
+        "tenant.created",
+        "tenant.updated",
+        "tenant.suspended",
+        "tenant.activated",
+        "tenant.cancelled",
+        "tenant.plan_changed",
+        "tenant.limit_changed",
+        "tenant.deleted",
+        "user.created_by_superadmin",
+        "user.deleted_by_superadmin",
+      ],
+    },
+    
+    // Who performed the action
+    admin: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    
+    // Which tenant was affected (if applicable)
     tenant: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Tenant",
-      index: true,
-      required: false,
     },
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      index: true,
-      required: false,
+    
+    // Details of the action
+    details: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
-    userEmail: { type: String, default: "" },
-    action: { type: String, required: true, index: true },
-    method: { type: String, default: "" },
-    path: { type: String, default: "", index: true },
-    statusCode: { type: Number, default: 0 },
-    resourceType: { type: String, default: "", index: true },
-    resourceId: { type: String, default: "", index: true },
-    ip: { type: String, default: "" },
-    userAgent: { type: String, default: "" },
-    requestId: { type: String, default: "", index: true },
-    metadata: { type: Object, default: {} },
+    
+    // HTTP Request info
+    ip: {
+      type: String,
+    },
+    userAgent: {
+      type: String,
+    },
+    
+    // For filtering by date range
+    timestamp: {
+      type: Date,
+      default: Date.now,
+    },
   },
   { timestamps: true },
 );
 
-auditLogSchema.index({ tenant: 1, createdAt: -1 });
+// Indexes for efficient querying
+auditLogSchema.index({ action: 1 });
+auditLogSchema.index({ admin: 1 });
+auditLogSchema.index({ tenant: 1 });
+auditLogSchema.index({ timestamp: -1 });
+auditLogSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("AuditLog", auditLogSchema);
