@@ -1,6 +1,6 @@
 const Tenant = require("../models/tenant.model");
 const User = require("../models/user.model");
-const Product = require("../models/product.model");
+const { Product } = require("../models/product.model");
 const Order = require("../models/order.model");
 const { handleServerError } = require("../utils/http");
 
@@ -59,13 +59,16 @@ exports.getTenantPlan = async (req, res) => {
       orders: planConfig.maxOrdersPerMonth === Infinity ? 0 : Math.round((ordersThisMonth / planConfig.maxOrdersPerMonth) * 100),
     };
 
+    // Infinity no es serializable a JSON → convertir a -1 (frontend lo interpreta como ilimitado)
+    const serializeLimit = (value) => (value === Infinity ? -1 : value);
+
     const availablePlans = Object.entries(PLAN_CONFIGS).map(([key, config]) => ({
       id: key,
       name: key.charAt(0).toUpperCase() + key.slice(1),
       price: config.price,
-      maxUsers: config.maxUsers,
-      maxProducts: config.maxProducts,
-      maxOrdersPerMonth: config.maxOrdersPerMonth,
+      maxUsers: serializeLimit(config.maxUsers),
+      maxProducts: serializeLimit(config.maxProducts),
+      maxOrdersPerMonth: serializeLimit(config.maxOrdersPerMonth),
       features: config.features,
       isCurrent: key === tenant.plan,
     }));
@@ -75,7 +78,11 @@ exports.getTenantPlan = async (req, res) => {
       plan: {
         current: tenant.plan,
         status: tenant.status,
-        limits: tenant.limits,
+        limits: {
+          maxUsers: serializeLimit(tenant.limits?.maxUsers),
+          maxProducts: serializeLimit(tenant.limits?.maxProducts),
+          maxOrdersPerMonth: serializeLimit(tenant.limits?.maxOrdersPerMonth),
+        },
         usage: { currentUsers: totalUsers, currentProducts: totalProducts, ordersThisMonth },
         usagePercentages,
         billing: tenant.billing,

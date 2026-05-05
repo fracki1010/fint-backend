@@ -137,11 +137,17 @@ async function sendEmail({ to, subject, html, text }) {
 
   try {
     const info = await transporter.sendMail({
-      from: process.env.EMAIL_FROM || "noreply@fintsuite.com",
+      from: `"Fint Suite" <${process.env.EMAIL_FROM || "noreply@padexa.online"}>`,
+      replyTo: process.env.EMAIL_REPLY_TO || "soporte@padexa.online",
       to,
       subject,
       text,
       html,
+      headers: {
+        "X-Mailer": "Fint Suite",
+        "Precedence": "bulk",
+        "List-Unsubscribe": `<mailto:unsubscribe@padexa.online?subject=unsubscribe-${encodeURIComponent(to)}>`,
+      },
     });
 
     console.log("[EMAIL] Sent:", info.messageId, "to:", to);

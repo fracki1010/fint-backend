@@ -1,6 +1,6 @@
 const Tenant = require("../models/tenant.model");
 const User = require("../models/user.model");
-const Product = require("../models/product.model");
+const { Product } = require("../models/product.model");
 const Order = require("../models/order.model");
 const AuditLog = require("../models/auditLog.model");
 const { handleServerError } = require("../utils/http");
@@ -236,8 +236,7 @@ const createTenant = async (req, res) => {
     const adminUser = await User.create({
       fullName: adminName,
       email: adminEmail.toLowerCase(),
-      phone: adminPhone,
-      password: hashedPassword,
+      passwordHash: hashedPassword,
       role: "admin",
       tenant: tenant._id,
       isActive: true,
