@@ -210,9 +210,9 @@ const createTenant = async (req, res) => {
     // Get plan configuration
     const planConfig = PLAN_CONFIGS[plan] || PLAN_CONFIGS.essential;
 
-    // Create tenant with 14-day trial
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14);
+    // Trial: solo Essential y Business tienen 14 días gratis. Enterprise no.
+    const trialDays = plan === "enterprise" ? 0 : 14;
+    const trialEndsAt = trialDays > 0 ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000) : undefined;
 
     const tenant = await Tenant.create({
       name: businessName,

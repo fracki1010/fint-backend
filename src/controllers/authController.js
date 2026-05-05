@@ -81,8 +81,12 @@ const createUserInternal = async ({
   }
 
   const passwordHash = await bcrypt.hash(cleanPassword, 10);
+  // Self-registration: Essential con 14 días de trial
+  const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
   const tenant = await Tenant.create({
     name: storeName || cleanName,
+    plan: "essential",
+    trialEndsAt,
   });
 
   const user = await User.create({
