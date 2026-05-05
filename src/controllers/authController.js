@@ -19,6 +19,8 @@ const generateToken = (userId) => {
   });
 };
 
+const serializeLimit = (value) => (value === Infinity || value === null || value === undefined ? -1 : value);
+
 const toAuthResponse = async (user) => {
   const tenant = await Tenant.findById(user.tenant).lean();
   return {
@@ -38,7 +40,11 @@ const toAuthResponse = async (user) => {
             name: tenant.name,
             plan: tenant.plan,
             status: tenant.status,
-            limits: tenant.limits,
+            limits: tenant.limits ? {
+              maxUsers: serializeLimit(tenant.limits.maxUsers),
+              maxProducts: serializeLimit(tenant.limits.maxProducts),
+              maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
+            } : undefined,
             enabledFeatures: tenant.enabledFeatures,
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
