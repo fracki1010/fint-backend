@@ -22,9 +22,15 @@ const stockMovementSchema = new mongoose.Schema(
     stockBefore: { type: Number, required: true },
     stockAfter: { type: Number, required: true },
     reason: { type: String }, // Razón detallada (ej: "Compra a proveedor", "Se echó a perder")
+    presentationName: { type: String }, // Nombre de la presentación vendida (trazabilidad)
     order: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order", // Opcional, solo si el movimiento fue por una venta
+    },
+    purchase: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Purchase", // Opcional, solo si el movimiento fue por una compra
+      default: null,
     },
     source: {
       type: String,

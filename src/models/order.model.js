@@ -17,6 +17,7 @@ const orderSchema = new mongoose.Schema(
       {
         product: { type: String, required: true }, // Nombre extraído por la IA
         productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+        presentationId: { type: mongoose.Schema.Types.ObjectId, default: null },
         quantity: { type: Number, required: true },
         price: { type: Number, required: true },
         unitCostAtSale: { type: Number, default: 0 },

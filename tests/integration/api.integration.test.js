@@ -12,6 +12,8 @@ const { createApp } = require("../../src/app");
 const { Product } = require("../../src/models/product.model");
 const Order = require("../../src/models/order.model");
 const StockMovement = require("../../src/models/stockMovement.model");
+const Purchase = require("../../src/models/purchase.model");
+const { Supply } = require("../../src/models/supply.model");
 
 let mongoServer;
 let app;
@@ -631,5 +633,705 @@ describe("API integration", () => {
     expect(updateResponse.status).toBe(200);
     expect(updateResponse.body.deliveryStatus).toBe("Entregada");
     expect(updateResponse.body.paymentStatus).toBe("Pendiente");
+  });
+
+  it("deduce stock base por equivalentQty al vender con presentacion y registra presentationName", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Presentacion",
+        phone: "5491111111177",
+        taxId: "20-77777777-7",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Alimento Balanceado",
+        price: 10,
+        stock: 100,
+        unitOfMeasure: "kg",
+        presentations: [
+          {
+            name: "Bolsa 20kg",
+            sku: "BOL-20",
+            unitOfMeasure: "kg",
+            price: 100,
+            equivalentQty: 20,
+          },
+        ],
+      });
+    expect(productResponse.status).toBe(201);
+    const productId = productResponse.body._id;
+    const presentationId = productResponse.body.presentations[0]._id;
+
+    const orderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Alimento Balanceado",
+            productId,
+            quantity: 3,
+            price: 100,
+            presentationId,
+          },
+        ],
+        totalAmount: 300,
+        salesStatus: "Confirmada",
+        paymentStatus: "Pagado",
+        deliveryStatus: "Entregada",
+      });
+
+    expect(orderResponse.status).toBe(201);
+    expect(orderResponse.body.items[0].presentationId).toBe(presentationId);
+
+    const productAfterSale = await Product.findById(productId).lean();
+    expect(productAfterSale.stock).toBe(40);
+
+    const movements = await StockMovement.find({
+      order: orderResponse.body._id,
+      type: "SALIDA",
+    }).lean();
+    expect(movements).toHaveLength(1);
+    expect(movements[0].quantity).toBe(60);
+    expect(movements[0].presentationName).toBe("Bolsa 20kg");
+  });
+
+  it("revierte stock base por equivalentQty al cancelar orden con presentacion", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Cancela Presentacion",
+        phone: "5491111111188",
+        taxId: "20-88888888-8",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Alimento Premium",
+        price: 15,
+        stock: 200,
+        unitOfMeasure: "kg",
+        presentations: [
+          {
+            name: "Bolsa 50kg",
+            sku: "BOL-50",
+            unitOfMeasure: "kg",
+            price: 250,
+            equivalentQty: 50,
+          },
+        ],
+      });
+    expect(productResponse.status).toBe(201);
+    const productId = productResponse.body._id;
+    const presentationId = productResponse.body.presentations[0]._id;
+
+    const orderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Alimento Premium",
+            productId,
+            quantity: 2,
+            price: 250,
+            presentationId,
+          },
+        ],
+        totalAmount: 500,
+        salesStatus: "Confirmada",
+        paymentStatus: "Pagado",
+        deliveryStatus: "Entregada",
+      });
+    expect(orderResponse.status).toBe(201);
+    const orderId = orderResponse.body._id;
+
+    const productAfterSale = await Product.findById(productId).lean();
+    expect(productAfterSale.stock).toBe(100);
+
+    const cancelResponse = await request(app)
+      .delete(`/api/orders/${orderId}`)
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(cancelResponse.status).toBe(200);
+
+    const productAfterCancel = await Product.findById(productId).lean();
+    expect(productAfterCancel.stock).toBe(200);
+
+    const movements = await StockMovement.find({
+      order: orderId,
+      type: "ENTRADA",
+    }).lean();
+    expect(movements).toHaveLength(1);
+    expect(movements[0].quantity).toBe(100);
+    expect(movements[0].presentationName).toBe("Bolsa 50kg");
+  });
+
+  describe("Purchase flow with product items", () => {
+    let token;
+    let supplierId;
+    let productId;
+    let supplyId;
+
+    beforeEach(async () => {
+      token = await bootstrapAndGetToken();
+
+      // Create supplier
+      const supplierRes = await request(app)
+        .post("/api/suppliers")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ name: "Proveedor Test", phone: "5491111111111" });
+      expect(supplierRes.status).toBe(201);
+      supplierId = supplierRes.body._id;
+
+      // Create product with purchase config
+      const productRes = await request(app)
+        .post("/api/products")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "Producto Comprable",
+          price: 200,
+          costPrice: 100,
+          stock: 10,
+          type: "raw_material",
+          purchaseUnit: "kg",
+          purchaseEquivalentQty: 2,
+        });
+      expect(productRes.status).toBe(201);
+      productId = productRes.body._id;
+
+      // Create legacy Supply directly (bypass the wrapper) for backward compat tests
+      const supply = await Supply.create({
+        tenant: productRes.body.tenant,
+        name: "Insumo Test",
+        unit: "kg",
+        currentStock: 5,
+        referenceCost: 50,
+        isActive: true,
+        deletedAt: null,
+      });
+      supplyId = supply._id;
+    });
+
+    it("supply flow legacy — purchase flow with supply still works after product changes", async () => {
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 1000,
+          tax: 0,
+          total: 1000,
+          items: [
+            {
+              supplyItemId: supplyId,
+              quantity: 10,
+              unitCost: 100,
+              lineTotal: 1000,
+            },
+          ],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      const supply = await Supply.findById(supplyId).lean();
+      expect(supply.currentStock).toBe(15);
+    });
+
+    it("receives product purchase — updates stock, costPrice, and creates StockMovement", async () => {
+      // Create purchase with product item
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 2000,
+          tax: 0,
+          total: 2000,
+          items: [
+            {
+              productItemId: productId,
+              quantity: 5,
+              unitCost: 150,
+              lineTotal: 750,
+            },
+          ],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      // Confirm
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      // Receive
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      // Verify product state after receive
+      const product = await Product.findById(productId).lean();
+      // purchaseEquivalentQty = 2, so qty = 5 * 2 = 10
+      // unitCost = 150 / 2 = 75
+      // AVCO: (10 * 100 + 10 * 75) / 20 = 1750 / 20 = 87.5
+      expect(product.stock).toBe(20);
+      expect(product.costPrice).toBe(87.5);
+      expect(product.costLocked).toBe(true);
+
+      // Verify StockMovement created
+      const movements = await StockMovement.find({
+        product: productId,
+        type: "ENTRADA",
+      }).lean();
+      expect(movements).toHaveLength(1);
+      expect(movements[0].quantity).toBe(10);
+      expect(movements[0].stockBefore).toBe(10);
+      expect(movements[0].stockAfter).toBe(20);
+      expect(movements[0].purchase.toString()).toBe(purchaseId);
+    });
+
+    it("receives product purchase with stock=0 — costPrice becomes unitCost", async () => {
+      // Create product with no stock — use unique barcode to avoid null collision
+      const newProductRes = await request(app)
+        .post("/api/products")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "Producto Sin Stock",
+          barcode: "TEST-NOSTOCK-001",
+          price: 100,
+          stock: 0,
+          purchaseEquivalentQty: 1,
+        });
+      expect(newProductRes.status).toBe(201);
+      const newProductId = newProductRes.body._id;
+
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 500,
+          tax: 0,
+          total: 500,
+          items: [{ productItemId: newProductId, quantity: 10, unitCost: 50, lineTotal: 500 }],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      const product = await Product.findById(newProductId).lean();
+      expect(product.stock).toBe(10);
+      expect(product.costPrice).toBe(50);
+      expect(product.costLocked).toBe(true);
+    });
+
+    it("receives purchase with mixed supply and product items", async () => {
+      // Create purchase with BOTH a supply item and a product item
+      // We'll need to create the purchase with two items
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 1500,
+          tax: 0,
+          total: 1500,
+          items: [
+            { supplyItemId: supplyId, quantity: 5, unitCost: 100, lineTotal: 500 },
+            { productItemId: productId, quantity: 3, unitCost: 200, lineTotal: 600 },
+          ],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      // Supply should have updated stock
+      const supply = await Supply.findById(supplyId).lean();
+      expect(supply.currentStock).toBe(10);
+
+      // Product should have updated stock and costLocked
+      const product = await Product.findById(productId).lean();
+      expect(product.stock).toBe(16); // 10 + 3*2
+      expect(product.costLocked).toBe(true);
+    });
+
+    it("rejects updateProduct when costLocked is true and costPrice changes", async () => {
+      // First receive a purchase to lock costPrice
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 500,
+          tax: 0,
+          total: 500,
+          items: [{ productItemId: productId, quantity: 1, unitCost: 100, lineTotal: 100 }],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      // Now try to update costPrice — should be 409
+      const updateRes = await request(app)
+        .put(`/api/products/${productId}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ costPrice: 50 });
+      expect(updateRes.status).toBe(409);
+      expect(updateRes.body.error.code).toBe("COST_LOCKED");
+    });
+
+    it("allows updateProduct with costLocked when costPrice is not changed", async () => {
+      // First receive to lock
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 500,
+          tax: 0,
+          total: 500,
+          items: [{ productItemId: productId, quantity: 1, unitCost: 100, lineTotal: 100 }],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      // Update other fields — should work
+      const updateRes = await request(app)
+        .put(`/api/products/${productId}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ name: "Producto Renombrado" });
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.name).toBe("Producto Renombrado");
+    });
+
+    it("rejects receive when product is inactive", async () => {
+      // Deactivate product
+      await Product.findByIdAndUpdate(productId, { isActive: false });
+
+      const purchaseRes = await request(app)
+        .post("/api/purchases")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          supplierId,
+          date: "2026-05-05",
+          paymentCondition: "CASH",
+          subtotal: 500,
+          tax: 0,
+          total: 500,
+          items: [{ productItemId: productId, quantity: 2, unitCost: 100, lineTotal: 200 }],
+        });
+      expect(purchaseRes.status).toBe(201);
+      const purchaseId = purchaseRes.body._id;
+
+      await request(app)
+        .post(`/api/purchases/${purchaseId}/confirm`)
+        .set("Authorization", `Bearer ${token}`)
+        .expect(200);
+
+      const receiveRes = await request(app)
+        .post(`/api/purchases/${purchaseId}/receive`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(receiveRes.status).toBe(404);
+      expect(receiveRes.body.error.code).toBe("PRODUCT_NOT_FOUND");
+    });
+  });
+
+  it("mantiene comportamiento identico para productos sin presentaciones (backwards compatibility)", async () => {
+    const token = await bootstrapAndGetToken();
+
+    const clientResponse = await request(app)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Cliente Backwards",
+        phone: "5491111111199",
+        taxId: "20-99999999-9",
+      });
+    expect(clientResponse.status).toBe(201);
+
+    const productResponse = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "Producto Simple",
+        price: 50,
+        stock: 50,
+      });
+    expect(productResponse.status).toBe(201);
+    const productId = productResponse.body._id;
+
+    const orderResponse = await request(app)
+      .post("/api/orders")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        client: clientResponse.body._id,
+        items: [
+          {
+            product: "Producto Simple",
+            productId,
+            quantity: 5,
+            price: 50,
+          },
+        ],
+        totalAmount: 250,
+        salesStatus: "Confirmada",
+        paymentStatus: "Pagado",
+        deliveryStatus: "Entregada",
+      });
+    expect(orderResponse.status).toBe(201);
+    const orderId = orderResponse.body._id;
+
+    const productAfterSale = await Product.findById(productId).lean();
+    expect(productAfterSale.stock).toBe(45);
+    expect(productAfterSale.presentations).toEqual([]);
+
+    const cancelResponse = await request(app)
+      .delete(`/api/orders/${orderId}`)
+      .set("Authorization", `Bearer ${token}`);
+    expect(cancelResponse.status).toBe(200);
+
+    const productAfterCancel = await Product.findById(productId).lean();
+    expect(productAfterCancel.stock).toBe(50);
+
+    const movements = await StockMovement.find({
+      order: orderId,
+      type: "SALIDA",
+    }).lean();
+    expect(movements).toHaveLength(1);
+    expect(movements[0].quantity).toBe(5);
+    expect(movements[0].presentationName).toBeUndefined();
+  });
+
+  describe("Supply API wrapper (supply → Product delegation)", () => {
+    let token;
+    let productId;
+
+    beforeEach(async () => {
+      token = await bootstrapAndGetToken();
+
+      // Create a Product with type=raw_material directly
+      const productRes = await request(app)
+        .post("/api/products")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "Insumo via Product",
+          type: "raw_material",
+          stock: 50,
+          costPrice: 25,
+          unitOfMeasure: "kg",
+        });
+      expect(productRes.status).toBe(201);
+      productId = productRes.body._id;
+    });
+
+    it("GET /api/supplies returns raw_material Products with Deprecation header", async () => {
+      const res = await request(app)
+        .get("/api/supplies")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.deprecation).toBe("true");
+      expect(Array.isArray(res.body)).toBe(true);
+
+      const found = res.body.find((s) => s._id === productId);
+      expect(found).toBeTruthy();
+      // Response should use Supply-shaped field names
+      expect(found.name).toBe("Insumo via Product");
+      expect(found.unit).toBe("kg");
+      expect(found.currentStock).toBe(50);
+      expect(found.referenceCost).toBe(25);
+    });
+
+    it("POST /api/supplies creates a Product with type=raw_material", async () => {
+      const res = await request(app)
+        .post("/api/supplies")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "Nuevo Insumo Wrapper",
+          unit: "unidad",
+          currentStock: 10,
+          referenceCost: 100,
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.headers.deprecation).toBe("true");
+
+      // Response uses Supply-shaped fields
+      expect(res.body.name).toBe("Nuevo Insumo Wrapper");
+      expect(res.body.unit).toBe("unidad");
+      expect(res.body.currentStock).toBe(10);
+      expect(res.body.referenceCost).toBe(100);
+
+      // Verify it was actually created as a Product
+      const product = await Product.findOne({
+        name: "Nuevo Insumo Wrapper",
+        tenant: res.body.tenant,
+      }).lean();
+      expect(product).toBeTruthy();
+      expect(product.type).toBe("raw_material");
+      expect(product.stock).toBe(10);
+      expect(product.costPrice).toBe(100);
+    });
+  });
+
+  describe("Recipe produce with product ingredients", () => {
+    let token;
+    let rawMaterialProduct;
+    let recipeId;
+
+    beforeEach(async () => {
+      token = await bootstrapAndGetToken();
+
+      // Create a raw_material product (the ingredient)
+      const ingredientRes = await request(app)
+        .post("/api/products")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "Harina",
+          type: "raw_material",
+          stock: 100,
+          costPrice: 10,
+          unitOfMeasure: "kg",
+        });
+      expect(ingredientRes.status).toBe(201);
+      rawMaterialProduct = ingredientRes.body._id;
+
+      // Create a recipe with a product ingredient
+      const recipeRes = await request(app)
+        .post("/api/recipes")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "Receta con Producto",
+          productId: null,
+          yieldQuantity: 1,
+          ingredients: [
+            {
+              productItemId: rawMaterialProduct,
+              quantity: 3,
+            },
+          ],
+        });
+      expect(recipeRes.status).toBe(201);
+      recipeId = recipeRes.body._id;
+    });
+
+    it("produceRecipe deducts from Product.stock when ingredient has product ref", async () => {
+      const produceRes = await request(app)
+        .post(`/api/recipes/${recipeId}/produce`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ quantity: 2 });
+
+      expect(produceRes.status).toBe(200);
+      expect(produceRes.body.batchesProduced).toBe(2);
+
+      // Verify stock was deducted from the raw material product
+      const product = await Product.findById(rawMaterialProduct).lean();
+      // 3 qty * 2 batches = 6 deducted from 100
+      expect(product.stock).toBe(94);
+
+      // Verify a StockMovement was created (ENTRADA is for purchased stock)
+      // For production, it's a SALIDA type StockMovement
+      const movements = await StockMovement.find({
+        product: rawMaterialProduct,
+      }).lean();
+      expect(movements).toHaveLength(1);
+      expect(movements[0].type).toBe("SALIDA");
+      expect(movements[0].quantity).toBe(6);
+      expect(movements[0].stockBefore).toBe(100);
+      expect(movements[0].stockAfter).toBe(94);
+    });
+
+    it("produceRecipe rejects when product ingredient stock is insufficient", async () => {
+      // Try to produce 50 batches (needs 150 units, only 100 available)
+      const produceRes = await request(app)
+        .post(`/api/recipes/${recipeId}/produce`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ quantity: 50 });
+
+      expect(produceRes.status).toBe(422);
+      expect(produceRes.body.error.code).toBe("INSUFFICIENT_STOCK");
+
+      // Verify stock was NOT deducted
+      const product = await Product.findById(rawMaterialProduct).lean();
+      expect(product.stock).toBe(100);
+    });
   });
 });

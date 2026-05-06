@@ -61,7 +61,7 @@ const reverseOrderAccountEntries = async ({ tenantId, orderId, actorUserId, sess
     notes: `Reversión automática por cancelación`,
     createdBy: actorUserId || null,
   }));
-  await ClientAccountEntry.create(reversals, { session });
+  await ClientAccountEntry.create(reversals, { session, ordered: true });
 };
 
 const deriveLegacyStatus = ({
@@ -140,6 +140,7 @@ const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session) => {
       quantity: Number(rawItem.quantity) || 0,
       price: Number(rawItem.price) || 0,
       unitCostAtSale: 0,
+      presentationId: rawItem.presentationId || null,
     };
 
     let matchedProduct = null;
@@ -198,8 +199,19 @@ const applyStockForOrder = async (order, session, reasonPrefix, source, tenantId
 
     if (!product) continue;
 
+    let qtyToDeduct = item.quantity;
+    let presentationName;
+
+    if (item.presentationId) {
+      const presentation = product.presentations.id(item.presentationId);
+      if (presentation) {
+        qtyToDeduct = item.quantity * presentation.equivalentQty;
+        presentationName = presentation.name;
+      }
+    }
+
     const stockBefore = product.stock;
-    const stockAfter = stockBefore - item.quantity;
+    const stockAfter = stockBefore - qtyToDeduct;
 
     if (stockAfter < 0) {
       throw new HttpError(
@@ -216,12 +228,13 @@ const applyStockForOrder = async (order, session, reasonPrefix, source, tenantId
       tenant: tenantId,
       product: product._id,
       type: "SALIDA",
-      quantity: item.quantity,
+      quantity: qtyToDeduct,
       stockBefore,
       stockAfter,
       reason: `${reasonPrefix} #${order._id}`,
       order: order._id,
       source,
+      presentationName,
     }).save({ session });
   }
 };
@@ -248,8 +261,19 @@ const revertStockForOrder = async (order, session, source, tenantId) => {
 
     if (!product) continue;
 
+    let qtyToRevert = item.quantity;
+    let presentationName;
+
+    if (item.presentationId) {
+      const presentation = product.presentations.id(item.presentationId);
+      if (presentation) {
+        qtyToRevert = item.quantity * presentation.equivalentQty;
+        presentationName = presentation.name;
+      }
+    }
+
     const stockBefore = product.stock;
-    const stockAfter = stockBefore + item.quantity;
+    const stockAfter = stockBefore + qtyToRevert;
 
     product.stock = stockAfter;
     await product.save({ session });
@@ -258,12 +282,13 @@ const revertStockForOrder = async (order, session, source, tenantId) => {
       tenant: tenantId,
       product: product._id,
       type: "ENTRADA",
-      quantity: item.quantity,
+      quantity: qtyToRevert,
       stockBefore,
       stockAfter,
       reason: `Reversion por cancelacion #${order._id}`,
       order: order._id,
       source,
+      presentationName,
     }).save({ session });
   }
 };
@@ -921,3 +946,6 @@ exports.deleteOrder = async (req, res) => {
     return handleServerError(res, error, "Error al cancelar la orden");
   }
 };
+
+exports.applyStockForOrder = applyStockForOrder;
+exports.revertStockForOrder = revertStockForOrder;

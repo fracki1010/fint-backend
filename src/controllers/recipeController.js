@@ -4,6 +4,7 @@ const Recipe = require("../models/recipe.model");
 const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const ProductionLog = require("../models/productionLog.model");
+const StockMovement = require("../models/stockMovement.model");
 const { Product } = require("../models/product.model");
 const { sendError, handleServerError } = require("../utils/http");
 const { notifyLowStock } = require("../utils/stockAlerts");
@@ -11,6 +12,7 @@ const { notifyLowStock } = require("../utils/stockAlerts");
 const POPULATE_RECIPE = [
   { path: "product", select: "name sku" },
   { path: "ingredients.supply", select: "name unit currentStock referenceCost" },
+  { path: "ingredients.product", select: "name unitOfMeasure stock costPrice minStock" },
 ];
 
 exports.getRecipes = async (req, res) => {
@@ -76,12 +78,18 @@ exports.createRecipe = async (req, res) => {
       });
     }
 
+    const ingredients = (req.body.ingredients || []).map((ing) => ({
+      supply: ing.supplyItemId || null,
+      product: ing.productItemId || null,
+      quantity: ing.quantity,
+    }));
+
     const created = await Recipe.create({
       tenant: tenantId,
       name,
       product: req.body.productId || null,
       yieldQuantity: req.body.yieldQuantity || 1,
-      ingredients: req.body.ingredients || [],
+      ingredients,
       notes: req.body.notes || "",
       isActive: true,
       deletedAt: null,
@@ -129,6 +137,14 @@ exports.updateRecipe = async (req, res) => {
       }
     }
 
+    const updatedIngredients = req.body.ingredients
+      ? req.body.ingredients.map((ing) => ({
+          supply: ing.supplyItemId || null,
+          product: ing.productItemId || null,
+          quantity: ing.quantity,
+        }))
+      : recipe.ingredients;
+
     Object.assign(recipe, {
       name: nextName,
       product:
@@ -136,7 +152,7 @@ exports.updateRecipe = async (req, res) => {
           ? req.body.productId || null
           : recipe.product,
       yieldQuantity: req.body.yieldQuantity ?? recipe.yieldQuantity,
-      ingredients: req.body.ingredients ?? recipe.ingredients,
+      ingredients: updatedIngredients,
       notes: req.body.notes ?? recipe.notes,
     });
 
@@ -190,6 +206,7 @@ exports.produceRecipe = async (req, res) => {
         isActive: { $ne: false },
       })
         .populate("ingredients.supply")
+        .populate("ingredients.product")
         .session(session);
 
       if (!recipe) {
@@ -204,15 +221,29 @@ exports.produceRecipe = async (req, res) => {
       // Check stock availability for all ingredients
       const shortages = [];
       for (const ing of recipe.ingredients) {
-        const supply = ing.supply;
         const needed = ing.quantity * batches;
-        if (!supply || supply.currentStock < needed) {
-          shortages.push({
-            supplyName: supply?.name || "Insumo desconocido",
-            needed,
-            available: supply?.currentStock ?? 0,
-            unit: supply?.unit || "",
-          });
+
+        if (ing.product) {
+          // Product-based ingredient
+          if (ing.product.stock < needed) {
+            shortages.push({
+              supplyName: ing.product.name || "Producto desconocido",
+              needed,
+              available: ing.product.stock,
+              unit: ing.product.unitOfMeasure || "",
+            });
+          }
+        } else {
+          // Legacy supply-based ingredient
+          const supply = ing.supply;
+          if (!supply || supply.currentStock < needed) {
+            shortages.push({
+              supplyName: supply?.name || "Insumo desconocido",
+              needed,
+              available: supply?.currentStock ?? 0,
+              unit: supply?.unit || "",
+            });
+          }
         }
       }
 
@@ -226,51 +257,99 @@ exports.produceRecipe = async (req, res) => {
         throw new Error("INSUFFICIENT_STOCK");
       }
 
-      // Deduct stock and create supply movements
+      // Deduct stock and create movements
       for (const ing of recipe.ingredients) {
-        const supply = ing.supply;
         const needed = ing.quantity * batches;
-        const stockBefore = supply.currentStock;
-        const stockAfter = stockBefore - needed;
 
-        supply.currentStock = stockAfter;
-        await supply.save({ session });
+        if (ing.product) {
+          // ── Product ingredient flow ──
+          const product = ing.product;
+          const stockBefore = product.stock;
+          const stockAfter = stockBefore - needed;
 
-        // Collect supplies that dropped below minimum
-        if (supply.minStock > 0 && stockAfter <= supply.minStock) {
-          lowStockAlerts.push({
-            _id: supply._id,
-            name: supply.name,
-            unit: supply.unit,
-            currentStock: stockAfter,
-            minStock: supply.minStock,
-          });
+          product.stock = stockAfter;
+          // product is already populated, but we need the actual doc for save
+          // Re-fetch within session to ensure transactional safety
+          const productDoc = await Product.findOne({ _id: product._id, tenant: tenantId })
+            .session(session);
+          if (!productDoc) throw new Error("PRODUCT_NOT_FOUND");
+
+          productDoc.stock = stockAfter;
+          await productDoc.save({ session });
+
+          // Collect products that dropped below minimum
+          if (product.minStock > 0 && stockAfter <= product.minStock) {
+            lowStockAlerts.push({
+              _id: product._id,
+              name: product.name,
+              unit: product.unitOfMeasure || "",
+              currentStock: stockAfter,
+              minStock: product.minStock,
+            });
+          }
+
+          await StockMovement.create(
+            [
+              {
+                tenant: tenantId,
+                product: product._id,
+                type: "SALIDA",
+                quantity: needed,
+                stockBefore,
+                stockAfter,
+                reason: `Producción: ${recipe.name}${notes ? ` — ${notes}` : ""}`,
+                source: "Sistema",
+              },
+            ],
+            { session },
+          );
+        } else if (ing.supply) {
+          // ── Legacy supply ingredient flow ──
+          const supply = ing.supply;
+          const stockBefore = supply.currentStock;
+          const stockAfter = stockBefore - needed;
+
+          supply.currentStock = stockAfter;
+          await supply.save({ session });
+
+          // Collect supplies that dropped below minimum
+          if (supply.minStock > 0 && stockAfter <= supply.minStock) {
+            lowStockAlerts.push({
+              _id: supply._id,
+              name: supply.name,
+              unit: supply.unit,
+              currentStock: stockAfter,
+              minStock: supply.minStock,
+            });
+          }
+
+          await SupplyMovement.create(
+            [
+              {
+                tenant: tenantId,
+                supply: supply._id,
+                type: "OUT",
+                quantity: needed,
+                stockBefore,
+                stockAfter,
+                reason: `Producción: ${recipe.name}${notes ? ` — ${notes}` : ""}`,
+                sourceType: "PRODUCTION",
+                sourceId: recipe._id.toString(),
+                createdBy: req.user?._id || null,
+              },
+            ],
+            { session },
+          );
         }
-
-        await SupplyMovement.create(
-          [
-            {
-              tenant: tenantId,
-              supply: supply._id,
-              type: "OUT",
-              quantity: needed,
-              stockBefore,
-              stockAfter,
-              reason: `Producción: ${recipe.name}${notes ? ` — ${notes}` : ""}`,
-              sourceType: "PRODUCTION",
-              sourceId: recipe._id.toString(),
-              createdBy: req.user?._id || null,
-            },
-          ],
-          { session },
-        );
       }
 
       // If linked to a product, increase its stock and update costPrice
       if (recipe.product) {
         const unitsProduced = recipe.yieldQuantity * batches;
         const totalIngredientCost = recipe.ingredients.reduce((sum, ing) => {
-          const cost = ing.supply?.referenceCost ?? 0;
+          const cost = ing.product
+            ? (ing.product.costPrice ?? 0)
+            : (ing.supply?.referenceCost ?? 0);
           return sum + ing.quantity * cost;
         }, 0);
         const costPerUnit = recipe.yieldQuantity > 0 ? totalIngredientCost / recipe.yieldQuantity : 0;

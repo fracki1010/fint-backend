@@ -5,7 +5,10 @@ const purchaseItemSchema = new mongoose.Schema(
     supply: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Supply",
-      required: true,
+    },
+    product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
     },
     quantity: { type: Number, required: true },
     unitCost: { type: Number, required: true },
@@ -45,10 +48,19 @@ const purchaseSchema = new mongoose.Schema(
     items: {
       type: [purchaseItemSchema],
       default: [],
-      validate: {
-        validator: (value) => Array.isArray(value) && value.length > 0,
-        message: "La compra debe incluir al menos un item.",
-      },
+      validate: [
+        {
+          validator: (value) => Array.isArray(value) && value.length > 0,
+          message: "La compra debe incluir al menos un item.",
+        },
+        {
+          validator: (value) =>
+            Array.isArray(value) &&
+            value.every((item) => item.supply || item.product),
+          message:
+            "Cada item debe tener un insumo (supply) o un producto (product).",
+        },
+      ],
     },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

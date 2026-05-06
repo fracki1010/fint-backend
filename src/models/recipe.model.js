@@ -5,7 +5,12 @@ const ingredientSchema = new mongoose.Schema(
     supply: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Supply",
-      required: true,
+      default: null,
+    },
+    product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
+      default: null,
     },
     quantity: { type: Number, required: true, min: 0 },
   },

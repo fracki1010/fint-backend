@@ -4,6 +4,9 @@ const Purchase = require("../models/purchase.model");
 const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
+const { recalculateAVCO } = require("../services/costingService");
+const { Product } = require("../models/product.model");
+const StockMovement = require("../models/stockMovement.model");
 const { sendError, handleServerError } = require("../utils/http");
 
 exports.getDashboard = async (req, res) => {
@@ -19,6 +22,7 @@ exports.getDashboard = async (req, res) => {
       lastMonthSpend,
       pendingCount,
       supplies,
+      rawMaterialProducts,
       statusBreakdown,
       monthlySeries,
       topSuppliers,
@@ -51,10 +55,14 @@ exports.getDashboard = async (req, res) => {
       // Pending to receive (CONFIRMED)
       Purchase.countDocuments({ tenant: tenantId, status: "CONFIRMED" }),
 
-      // All active supplies for inventory value + low stock
+      // All active supplies and raw_material products for inventory value + low stock
       Supply.find(
         { tenant: tenantId, isActive: { $ne: false } },
         { currentStock: 1, referenceCost: 1, minStock: 1 },
+      ).lean(),
+      Product.find(
+        { tenant: tenantId, type: "raw_material", isActive: { $ne: false } },
+        { stock: 1, costPrice: 1, minStock: 1 },
       ).lean(),
 
       // Status breakdown (excluding CANCELLED)
@@ -118,9 +126,14 @@ exports.getDashboard = async (req, res) => {
     const inventoryValue = supplies.reduce(
       (sum, s) => sum + (s.currentStock || 0) * (s.referenceCost || 0),
       0,
+    ) + rawMaterialProducts.reduce(
+      (sum, p) => sum + (p.stock || 0) * (p.costPrice || 0),
+      0,
     );
     const lowStockCount = supplies.filter(
       (s) => s.minStock > 0 && s.currentStock <= s.minStock,
+    ).length + rawMaterialProducts.filter(
+      (p) => p.minStock > 0 && p.stock <= p.minStock,
     ).length;
 
     const statusMap = {};
@@ -162,7 +175,8 @@ exports.getDashboard = async (req, res) => {
 const mapPurchaseWithRelations = async (tenantId, id) =>
   Purchase.findOne({ _id: id, tenant: tenantId })
     .populate("supplier", "name company phone taxId")
-    .populate("items.supply", "name sku unit");
+    .populate("items.supply", "name sku unit")
+    .populate("items.product", "name sku unitOfMeasure");
 
 exports.getPurchases = async (req, res) => {
   try {
@@ -170,6 +184,7 @@ exports.getPurchases = async (req, res) => {
     const purchases = await Purchase.find({ tenant: tenantId })
       .populate("supplier", "name company")
       .populate("items.supply", "name unit")
+      .populate("items.product", "name unitOfMeasure")
       .sort({ createdAt: -1 });
 
     return res.json(purchases);
@@ -211,12 +226,16 @@ exports.createPurchase = async (req, res) => {
       tax: req.body.tax,
       total: req.body.total,
       notes: req.body.notes || "",
-      items: req.body.items.map((item) => ({
-        supply: item.supplyItemId,
-        quantity: item.quantity,
-        unitCost: item.unitCost,
-        lineTotal: item.lineTotal,
-      })),
+      items: req.body.items.map((item) => {
+        const mapped = {
+          quantity: item.quantity,
+          unitCost: item.unitCost,
+          lineTotal: item.lineTotal,
+        };
+        if (item.supplyItemId) mapped.supply = item.supplyItemId;
+        if (item.productItemId) mapped.product = item.productItemId;
+        return mapped;
+      }),
       createdBy: req.user?._id,
     };
 
@@ -269,43 +288,89 @@ exports.receivePurchase = async (req, res) => {
       const tenantId = req.user?.tenant;
       const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
         .populate("items.supply")
+        .populate("items.product")
         .session(session);
 
       if (!purchase) throw new Error("PURCHASE_NOT_FOUND");
       if (purchase.status !== "CONFIRMED") throw new Error("INVALID_STATUS_TRANSITION");
 
       for (const item of purchase.items) {
-        const supply = await Supply.findOne({
-          _id: item.supply._id,
-          tenant: tenantId,
-          isActive: { $ne: false },
-        }).session(session);
+        if (item.product) {
+          // ── Product flow ──
+          const product = await Product.findOne({
+            _id: item.product._id,
+            tenant: tenantId,
+            isActive: { $ne: false },
+          }).session(session);
 
-        if (!supply) throw new Error("SUPPLY_NOT_FOUND");
+          if (!product) throw new Error("PRODUCT_NOT_FOUND");
+          if (product.type === "finished") throw new Error("PRODUCT_TYPE_NOT_PURCHASABLE");
 
-        const stockBefore = supply.currentStock;
-        const stockAfter = stockBefore + Number(item.quantity);
+          const receivedQty = Number(item.quantity);
+          const equivalentQty = product.purchaseEquivalentQty || 1;
+          const stockQty = receivedQty * equivalentQty;
+          const unitCost = equivalentQty !== 1
+            ? Number(item.unitCost) / equivalentQty
+            : Number(item.unitCost);
 
-        supply.currentStock = stockAfter;
-        await supply.save({ session });
+          const stockBefore = product.stock;
+          const result = recalculateAVCO(product, stockQty, unitCost);
 
-        await SupplyMovement.create(
-          [
-            {
-              tenant: tenantId,
-              supply: supply._id,
-              type: "IN",
-              quantity: Number(item.quantity),
-              stockBefore,
-              stockAfter,
-              reason: `Recepcion de compra ${purchase._id}`,
-              sourceType: "PURCHASE",
-              sourceId: String(purchase._id),
-              createdBy: req.user?._id,
-            },
-          ],
-          { session },
-        );
+          product.stock = result.stock;
+          product.costPrice = result.costPrice;
+          product.costLocked = true;
+          await product.save({ session });
+
+          await StockMovement.create(
+            [
+              {
+                tenant: tenantId,
+                product: product._id,
+                type: "ENTRADA",
+                quantity: stockQty,
+                stockBefore,
+                stockAfter: product.stock,
+                reason: `Recepcion de compra ${purchase._id}`,
+                purchase: purchase._id,
+                source: "Sistema",
+              },
+            ],
+            { session },
+          );
+        } else {
+          // ── Supply flow (legacy) ──
+          const supply = await Supply.findOne({
+            _id: item.supply._id,
+            tenant: tenantId,
+            isActive: { $ne: false },
+          }).session(session);
+
+          if (!supply) throw new Error("SUPPLY_NOT_FOUND");
+
+          const stockBefore = supply.currentStock;
+          const stockAfter = stockBefore + Number(item.quantity);
+
+          supply.currentStock = stockAfter;
+          await supply.save({ session });
+
+          await SupplyMovement.create(
+            [
+              {
+                tenant: tenantId,
+                supply: supply._id,
+                type: "IN",
+                quantity: Number(item.quantity),
+                stockBefore,
+                stockAfter,
+                reason: `Recepcion de compra ${purchase._id}`,
+                sourceType: "PURCHASE",
+                sourceId: String(purchase._id),
+                createdBy: req.user?._id,
+              },
+            ],
+            { session },
+          );
+        }
       }
 
       const accountEntries = [
@@ -340,7 +405,7 @@ exports.receivePurchase = async (req, res) => {
         });
       }
 
-      await SupplierAccountEntry.create(accountEntries, { session });
+      await SupplierAccountEntry.create(accountEntries, { session, ordered: true });
 
       purchase.status = "RECEIVED";
       purchase.receivedAt = new Date();
@@ -369,6 +434,22 @@ exports.receivePurchase = async (req, res) => {
         status: 404,
         code: "SUPPLY_NOT_FOUND",
         message: "Insumo no encontrado en items de compra.",
+      });
+    }
+
+    if (error.message === "PRODUCT_NOT_FOUND") {
+      return sendError(res, {
+        status: 404,
+        code: "PRODUCT_NOT_FOUND",
+        message: "Producto no encontrado en items de compra.",
+      });
+    }
+
+    if (error.message === "PRODUCT_TYPE_NOT_PURCHASABLE") {
+      return sendError(res, {
+        status: 400,
+        code: "PRODUCT_TYPE_NOT_PURCHASABLE",
+        message: "El producto es de tipo 'finished' y no está habilitado para compras. Usá un insumo (Supply) o cambiá el tipo del producto a 'raw_material' o 'both'.",
       });
     }
 

@@ -62,6 +62,29 @@ const createClientBody = z.object({
 
 const updateClientBody = z.object(clientPayloadBase);
 
+const UNIT_OPTIONS_ENUM = z.enum([
+  "unidad",
+  "caja",
+  "paquete",
+  "bolsa",
+  "botella",
+  "kg",
+  "g",
+  "litro",
+  "ml",
+  "metro",
+]);
+
+const presentationSchema = z.object({
+  sku: z.string().trim().optional(),
+  barcode: z.string().trim().optional(),
+  name: z.string().trim().min(1, "Nombre requerido"),
+  unitOfMeasure: UNIT_OPTIONS_ENUM,
+  price: z.coerce.number().min(0, "Precio inválido"),
+  equivalentQty: z.coerce.number().positive("Cantidad equivalente inválida"),
+  isActive: z.boolean().optional(),
+});
+
 const productPayloadBase = {
   sku: z.string().trim().optional(),
   barcode: z.string().trim().optional(),
@@ -73,26 +96,22 @@ const productPayloadBase = {
   minStock: z.coerce.number().min(0, "Stock mínimo inválido").optional(),
   category: z.string().trim().optional(),
   categories: z.array(z.string().trim().min(1)).optional(),
-  unitOfMeasure: z
-    .enum([
-      "unidad",
-      "caja",
-      "paquete",
-      "bolsa",
-      "botella",
-      "kg",
-      "g",
-      "litro",
-      "ml",
-      "metro",
-    ])
+  unitOfMeasure: UNIT_OPTIONS_ENUM.optional(),
+  type: z
+    .enum(["raw_material", "finished", "both"])
     .optional(),
+  purchaseUnit: UNIT_OPTIONS_ENUM.optional(),
+  purchaseEquivalentQty: z.coerce
+    .number()
+    .positive("Cantidad equivalente debe ser positiva")
+    .optional(),
+  presentations: z.array(presentationSchema).optional(),
 };
 
 const createProductBody = z.object({
   ...productPayloadBase,
   name: z.string().trim().min(1, "Nombre requerido"),
-  price: z.coerce.number().min(0, "Precio inválido"),
+  price: z.coerce.number().min(0, "Precio inválido").optional(),
 });
 
 const updateProductBody = z.object(productPayloadBase);
@@ -102,6 +121,7 @@ const orderItemSchema = z.object({
   quantity: z.coerce.number().positive("Cantidad inválida"),
   price: z.coerce.number().min(0, "Precio inválido"),
   productId: objectId.optional(),
+  presentationId: objectId.optional(),
 });
 
 const createOrderBody = z.object({
@@ -173,12 +193,45 @@ const supplyMovementBody = z.object({
   sourceId: z.string().trim().optional(),
 });
 
+const recipeIngredientSchema = z.object({
+  supplyItemId: objectId.optional(),
+  productItemId: objectId.optional(),
+  quantity: z.coerce.number().positive("Cantidad invalida"),
+}).refine(
+  (data) => data.supplyItemId || data.productItemId,
+  {
+    message: "Cada ingrediente debe tener un insumo (supplyItemId) o un producto (productItemId).",
+  },
+);
+
+const createRecipeBody = z.object({
+  name: z.string().trim().min(1, "Nombre requerido"),
+  productId: objectId.optional(),
+  yieldQuantity: z.coerce.number().positive("Cantidad invalida").optional(),
+  ingredients: z.array(recipeIngredientSchema).optional(),
+  notes: z.string().trim().optional(),
+});
+
+const updateRecipeBody = z.object({
+  name: z.string().trim().min(1).optional(),
+  productId: objectId.optional(),
+  yieldQuantity: z.coerce.number().positive("Cantidad invalida").optional(),
+  ingredients: z.array(recipeIngredientSchema).optional(),
+  notes: z.string().trim().optional(),
+});
+
 const purchaseItemBody = z.object({
-  supplyItemId: objectId,
+  supplyItemId: objectId.optional(),
+  productItemId: objectId.optional(),
   quantity: z.coerce.number().positive("Cantidad invalida"),
   unitCost: z.coerce.number().min(0, "Costo invalido"),
   lineTotal: z.coerce.number().min(0, "Subtotal invalido"),
-});
+}).refine(
+  (data) => data.supplyItemId || data.productItemId,
+  {
+    message: "Cada item debe tener un insumo (supplyItemId) o un producto (productItemId).",
+  },
+);
 
 const createPurchaseBody = z.object({
   supplierId: objectId,
@@ -283,6 +336,9 @@ const notificationIdParam = z.object({
 });
 
 module.exports = {
+  recipeIngredientSchema,
+  createRecipeBody,
+  updateRecipeBody,
   createSupplyBody,
   updateSupplyBody,
   supplyMovementBody,

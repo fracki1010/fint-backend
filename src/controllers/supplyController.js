@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 
 const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
+const { Product } = require("../models/product.model");
+const StockMovement = require("../models/stockMovement.model");
 const { sendError, handleServerError } = require("../utils/http");
 const { notifyLowStock } = require("../utils/stockAlerts");
 
@@ -18,31 +20,96 @@ const normalizeSku = (value = "") =>
     .replace(/^-+|-+$/g, "")
     .toUpperCase();
 
+const generateSkuBase = (name) => {
+  const prefix =
+    normalizeSku(name).replace(/-/g, "").slice(0, 8).toUpperCase() || "SUP";
+  return `SUP-${prefix}`;
+};
+
+const generateUniqueSku = async (tenantId, name) => {
+  const base = generateSkuBase(name);
+  let candidate = base;
+  let sequence = 1;
+
+  while (true) {
+    const existing = await Product.findOne({
+      tenant: tenantId,
+      sku: candidate,
+    });
+    if (!existing) return candidate;
+    sequence += 1;
+    candidate = `${base}-${String(sequence).padStart(2, "0")}`;
+  }
+};
+
+/**
+ * Map a Product doc (type=raw_material) to the legacy Supply response shape
+ * so existing clients are not broken.
+ */
+function mapProductToSupplyShape(product) {
+  const doc = product.toObject ? product.toObject() : product;
+  return {
+    _id: doc._id,
+    sku: doc.sku || undefined,
+    name: doc.name,
+    unit: doc.unitOfMeasure || "unidad",
+    currentStock: doc.stock ?? 0,
+    minStock: doc.minStock ?? 0,
+    referenceCost: doc.costPrice ?? 0,
+    isActive: doc.isActive,
+    deletedAt: doc.deletedAt,
+    tenant: doc.tenant,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+function setDeprecationHeader(res) {
+  res.set("Deprecation", "true");
+}
+
+/**
+ * Get raw_material Products, mapped to Supply shape.
+ * Supports ?includeInactive=true to include inactive Products.
+ */
 exports.getSupplies = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
     const includeInactive = req.query.includeInactive === "true";
     const filter = includeInactive
-      ? { tenant: tenantId }
-      : { tenant: tenantId, isActive: { $ne: false } };
+      ? { tenant: tenantId, type: "raw_material" }
+      : { tenant: tenantId, type: "raw_material", isActive: { $ne: false } };
 
-    const supplies = await Supply.find(filter).sort({ name: 1 });
+    const products = await Product.find(filter).sort({ name: 1 });
+    const supplies = products.map(mapProductToSupplyShape);
 
+    setDeprecationHeader(res);
     return res.json(supplies);
   } catch (error) {
     return handleServerError(res, error, "Error al obtener insumos");
   }
 };
 
+/**
+ * Create a Product with type=raw_material (instead of Supply).
+ * Accepts legacy Supply field names and maps them.
+ * The productController has price required, so we default to 0
+ * when no price is provided.
+ */
 exports.createSupply = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
     const name = req.body.name?.toString().trim();
     const sku = req.body.sku?.trim() ? normalizeSku(req.body.sku) : null;
 
-    const duplicated = await Supply.findOne({
+    // Check for duplicate by name among raw_material Products
+    // Generate unique SKU
+    const finalSku = sku || (await generateUniqueSku(tenantId, name));
+
+    const duplicated = await Product.findOne({
       tenant: tenantId,
-      $or: [{ name }, ...(sku ? [{ sku }] : [])],
+      type: "raw_material",
+      $or: [{ name }, { sku: finalSku }],
     });
 
     if (duplicated) {
@@ -53,34 +120,44 @@ exports.createSupply = async (req, res) => {
       });
     }
 
-    const created = await Supply.create({
+    // Build payload
+    const productPayload = {
       tenant: tenantId,
       name,
-      sku,
-      unit: req.body.unit,
-      currentStock: req.body.currentStock || 0,
-      minStock: req.body.minStock || 0,
-      referenceCost: req.body.referenceCost || 0,
+      sku: finalSku,
+      unitOfMeasure: req.body.unit || "unidad",
+      type: "raw_material",
+      stock: req.body.currentStock ?? 0,
+      minStock: req.body.minStock ?? 0,
+      costPrice: req.body.referenceCost ?? 0,
+      price: 0,
       isActive: true,
       deletedAt: null,
-    });
+    };
 
-    return res.status(201).json(created);
+    const created = await Product.create(productPayload);
+
+    setDeprecationHeader(res);
+    return res.status(201).json(mapProductToSupplyShape(created));
   } catch (error) {
     return handleServerError(res, error, "Error al crear insumo");
   }
 };
 
+/**
+ * Update the corresponding raw_material Product.
+ */
 exports.updateSupply = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
-    const supply = await Supply.findOne({
+    const product = await Product.findOne({
       _id: req.params.id,
       tenant: tenantId,
+      type: "raw_material",
       isActive: { $ne: false },
     });
 
-    if (!supply) {
+    if (!product) {
       return sendError(res, {
         status: 404,
         code: "SUPPLY_NOT_FOUND",
@@ -88,14 +165,15 @@ exports.updateSupply = async (req, res) => {
       });
     }
 
-    const nextName = req.body.name?.toString().trim() || supply.name;
+    const nextName = req.body.name?.toString().trim() || product.name;
     const nextSku = req.body.sku?.trim()
       ? normalizeSku(req.body.sku)
-      : supply.sku;
+      : product.sku;
 
-    const duplicated = await Supply.findOne({
+    const duplicated = await Product.findOne({
       tenant: tenantId,
-      _id: { $ne: supply._id },
+      type: "raw_material",
+      _id: { $ne: product._id },
       $or: [{ name: nextName }, ...(nextSku ? [{ sku: nextSku }] : [])],
     });
 
@@ -107,33 +185,42 @@ exports.updateSupply = async (req, res) => {
       });
     }
 
-    Object.assign(supply, {
+    Object.assign(product, {
       name: nextName,
       sku: nextSku,
-      unit: req.body.unit ?? supply.unit,
-      minStock: req.body.minStock ?? supply.minStock,
-      referenceCost: req.body.referenceCost ?? supply.referenceCost,
+      unitOfMeasure: req.body.unit ?? product.unitOfMeasure,
+      minStock: req.body.minStock ?? product.minStock,
+      costPrice: req.body.referenceCost ?? product.costPrice,
     });
 
-    await supply.save();
+    await product.save();
 
-    return res.json(supply);
+    setDeprecationHeader(res);
+    return res.json(mapProductToSupplyShape(product));
   } catch (error) {
     return handleServerError(res, error, "Error al actualizar insumo");
   }
 };
 
+/**
+ * Deactivate (soft-delete) the corresponding raw_material Product.
+ */
 exports.deleteSupply = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
 
-    const supply = await Supply.findOneAndUpdate(
-      { _id: req.params.id, tenant: tenantId, isActive: { $ne: false } },
+    const product = await Product.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        tenant: tenantId,
+        type: "raw_material",
+        isActive: { $ne: false },
+      },
       { isActive: false, deletedAt: new Date() },
       { new: true },
     );
 
-    if (!supply) {
+    if (!product) {
       return sendError(res, {
         status: 404,
         code: "SUPPLY_NOT_FOUND",
@@ -141,50 +228,60 @@ exports.deleteSupply = async (req, res) => {
       });
     }
 
-    return res.json({ message: "Insumo desactivado", supply });
+    setDeprecationHeader(res);
+    return res.json({ message: "Insumo desactivado", supply: mapProductToSupplyShape(product) });
   } catch (error) {
     return handleServerError(res, error, "Error al desactivar insumo");
   }
 };
 
+/**
+ * Get StockMovements for the Product (instead of SupplyMovements).
+ * Looks up movements by product ID.
+ */
 exports.getSupplyMovements = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
 
-    const movements = await SupplyMovement.find({
+    const movements = await StockMovement.find({
       tenant: tenantId,
-      supply: req.params.id,
+      product: req.params.id,
     })
-      .populate("supply", "name sku unit")
+      .populate("product", "name sku unitOfMeasure")
       .sort({ createdAt: -1 });
 
+    setDeprecationHeader(res);
     return res.json(movements);
   } catch (error) {
     return handleServerError(res, error, "Error al obtener movimientos de insumo");
   }
 };
 
+/**
+ * Create a StockMovement for the Product (instead of SupplyMovement).
+ */
 exports.createSupplyMovement = async (req, res) => {
   const session = await mongoose.startSession();
-  let alertSupply = null;
+  let alertProduct = null;
 
   try {
     await session.withTransaction(async () => {
       const tenantId = req.user?.tenant;
       const { type, quantity, reason, sourceType } = req.body;
 
-      const supply = await Supply.findOne({
+      const product = await Product.findOne({
         _id: req.params.id,
         tenant: tenantId,
+        type: "raw_material",
         isActive: { $ne: false },
       }).session(session);
 
-      if (!supply) {
+      if (!product) {
         throw new Error("SUPPLY_NOT_FOUND");
       }
 
       const qty = Number(quantity);
-      const stockBefore = supply.currentStock;
+      const stockBefore = product.stock;
       let stockAfter = stockBefore;
 
       if (type === "IN") stockAfter += qty;
@@ -195,38 +292,43 @@ exports.createSupplyMovement = async (req, res) => {
         throw new Error("NEGATIVE_STOCK");
       }
 
-      supply.currentStock = stockAfter;
-      await supply.save({ session });
+      product.stock = stockAfter;
+      await product.save({ session });
 
       // Capture alert data if stock dropped below minimum
-      if (stockAfter < stockBefore && supply.minStock > 0 && stockAfter <= supply.minStock) {
-        alertSupply = {
-          _id: supply._id,
-          name: supply.name,
-          unit: supply.unit,
+      if (stockAfter < stockBefore && product.minStock > 0 && stockAfter <= product.minStock) {
+        alertProduct = {
+          _id: product._id,
+          name: product.name,
+          unit: product.unitOfMeasure || "unidad",
           currentStock: stockAfter,
-          minStock: supply.minStock,
+          minStock: product.minStock,
         };
       }
 
-      const movement = await SupplyMovement.create(
+      const movementTypeMap = {
+        IN: "ENTRADA",
+        OUT: "SALIDA",
+        ADJUST: "AJUSTE",
+      };
+
+      const movement = await StockMovement.create(
         [
           {
             tenant: tenantId,
-            supply: supply._id,
-            type,
+            product: product._id,
+            type: movementTypeMap[type] || "AJUSTE",
             quantity: qty,
             stockBefore,
             stockAfter,
             reason: reason || "",
-            sourceType: sourceType || "MANUAL",
-            sourceId: req.body.sourceId || null,
-            createdBy: req.user?._id,
+            source: "Sistema",
           },
         ],
         { session },
       );
 
+      setDeprecationHeader(res);
       res.status(201).json(movement[0]);
     });
   } catch (error) {
@@ -251,7 +353,7 @@ exports.createSupplyMovement = async (req, res) => {
   }
 
   // Fire-and-forget: notify after transaction commits
-  if (alertSupply && req.user?._id) {
-    notifyLowStock(req.user._id, alertSupply).catch(() => {});
+  if (alertProduct && req.user?._id) {
+    notifyLowStock(req.user._id, alertProduct).catch(() => {});
   }
 };
