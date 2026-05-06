@@ -171,8 +171,8 @@ const buildProductPayload = async (tenantId, payload, currentProductId = null) =
     unitOfMeasure: normalizedUnit,
     type: payload.type || undefined,
     purchaseUnit: payload.purchaseUnit || undefined,
-    purchaseEquivalentQty: payload.purchaseEquivalentQty || undefined,
-    costLocked: payload.costLocked || undefined,
+    purchaseEquivalentQty: payload.purchaseEquivalentQty ?? undefined,
+    costLocked: payload.costLocked ?? undefined,
     presentations: normalizePresentations(payload.presentations),
     isActive: true,
     deletedAt: null,
@@ -231,7 +231,7 @@ exports.lookupProductByCode = async (req, res) => {
       "presentations.sku": normalizedCode,
     }).limit(MAX_RESULTS);
 
-    // 5. Búsqueda general: barcode, SKU o nombre que contenga el texto
+    // 5. Búsqueda general: barcode, SKU, nombre o nombre de presentación que contenga el texto
     const general = await Product.find({
       ...activeFilter,
       $or: [
@@ -240,6 +240,7 @@ exports.lookupProductByCode = async (req, res) => {
         { name: { $regex: normalizedCode, $options: "i" } },
         { "presentations.sku": { $regex: normalizedCode, $options: "i" } },
         { "presentations.barcode": { $regex: normalizedCode, $options: "i" } },
+        { "presentations.name": { $regex: normalizedCode, $options: "i" } },
       ],
     }).limit(MAX_RESULTS);
 
@@ -371,6 +372,7 @@ exports.createProduct = async (req, res) => {
 
     const existingProduct = await Product.findOne({
       tenant: tenantId,
+      isActive: { $ne: false },
       $or: [
         { name: normalizedName },
         ...(normalizedSku ? [{ sku: normalizedSku }] : []),
@@ -397,8 +399,8 @@ exports.createProduct = async (req, res) => {
       null,
     );
 
-    // raw_material products: price defaults to 0 if not provided
-    if (payload.type === "raw_material" && payload.price === undefined) {
+    // Default price to 0 if not provided (presentations may define their own prices)
+    if (payload.price === undefined || payload.price === null) {
       payload.price = 0;
     }
 
@@ -467,6 +469,7 @@ exports.updateProduct = async (req, res) => {
 
     const duplicated = await Product.findOne({
       tenant: tenantId,
+      isActive: { $ne: false },
       _id: { $ne: req.params.id },
       $or: [
         { name: nextName },

@@ -234,6 +234,7 @@ exports.createPurchase = async (req, res) => {
         };
         if (item.supplyItemId) mapped.supply = item.supplyItemId;
         if (item.productItemId) mapped.product = item.productItemId;
+        if (item.presentationId) mapped.presentationId = item.presentationId;
         return mapped;
       }),
       createdBy: req.user?._id,
@@ -307,7 +308,20 @@ exports.receivePurchase = async (req, res) => {
           if (product.type === "finished") throw new Error("PRODUCT_TYPE_NOT_PURCHASABLE");
 
           const receivedQty = Number(item.quantity);
-          const equivalentQty = product.purchaseEquivalentQty || 1;
+          // If presentationId is set, use presentation.equivalentQty; otherwise use product.purchaseEquivalentQty
+          let equivalentQty = product.purchaseEquivalentQty || 1;
+          let presentationName;
+          let presentationEquivalentQty;
+          let presentationUnitCost;
+          if (item.presentationId) {
+            const presentation = product.presentations.id(item.presentationId);
+            if (presentation) {
+              equivalentQty = presentation.equivalentQty || 1;
+              presentationName = presentation.name;
+              presentationEquivalentQty = presentation.equivalentQty || 1;
+              presentationUnitCost = Number(item.unitCost);
+            }
+          }
           const stockQty = receivedQty * equivalentQty;
           const unitCost = equivalentQty !== 1
             ? Number(item.unitCost) / equivalentQty
@@ -333,45 +347,96 @@ exports.receivePurchase = async (req, res) => {
                 reason: `Recepcion de compra ${purchase._id}`,
                 purchase: purchase._id,
                 source: "Sistema",
+                presentationName,
+                presentationId: item.presentationId || undefined,
+                presentationEquivalentQty,
+                presentationUnitCost,
               },
             ],
             { session },
           );
-        } else {
-          // ── Supply flow (legacy) ──
-          const supply = await Supply.findOne({
-            _id: item.supply._id,
+        } else if (item.supply) {
+          // ── Supply flow (legacy) — try Product first since supplies are now Products ──
+          const supplyId = item.supply._id;
+
+          // Check if this is actually a Product (supply→product unification)
+          const product = await Product.findOne({
+            _id: supplyId,
             tenant: tenantId,
             isActive: { $ne: false },
           }).session(session);
 
-          if (!supply) throw new Error("SUPPLY_NOT_FOUND");
+          if (product) {
+            // Treat as Product (unified supply)
+            const receivedQty = Number(item.quantity);
+            const equivalentQty = product.purchaseEquivalentQty || 1;
+            const stockQty = receivedQty * equivalentQty;
+            const unitCost = equivalentQty !== 1
+              ? Number(item.unitCost) / equivalentQty
+              : Number(item.unitCost);
 
-          const stockBefore = supply.currentStock;
-          const stockAfter = stockBefore + Number(item.quantity);
+            const stockBefore = product.stock;
+            const result = recalculateAVCO(product, stockQty, unitCost);
 
-          supply.currentStock = stockAfter;
-          await supply.save({ session });
+            product.stock = result.stock;
+            product.costPrice = result.costPrice;
+            product.costLocked = true;
+            await product.save({ session });
 
-          await SupplyMovement.create(
-            [
-              {
-                tenant: tenantId,
-                supply: supply._id,
-                type: "IN",
-                quantity: Number(item.quantity),
-                stockBefore,
-                stockAfter,
-                reason: `Recepcion de compra ${purchase._id}`,
-                sourceType: "PURCHASE",
-                sourceId: String(purchase._id),
-                createdBy: req.user?._id,
-              },
-            ],
-            { session },
-          );
+            await StockMovement.create(
+              [
+                {
+                  tenant: tenantId,
+                  product: product._id,
+                  type: "ENTRADA",
+                  quantity: stockQty,
+                  stockBefore,
+                  stockAfter: product.stock,
+                  reason: `Recepcion de compra ${purchase._id}`,
+                  purchase: purchase._id,
+                  source: "Sistema",
+                },
+              ],
+              { session },
+            );
+          } else {
+            // Legacy Supply document
+            const supply = await Supply.findOne({
+              _id: supplyId,
+              tenant: tenantId,
+              isActive: { $ne: false },
+            }).session(session);
+
+            if (!supply) throw new Error("SUPPLY_NOT_FOUND");
+
+            const stockBefore = supply.currentStock;
+            const stockAfter = stockBefore + Number(item.quantity);
+
+            supply.currentStock = stockAfter;
+            await supply.save({ session });
+
+            await SupplyMovement.create(
+              [
+                {
+                  tenant: tenantId,
+                  supply: supply._id,
+                  type: "IN",
+                  quantity: Number(item.quantity),
+                  stockBefore,
+                  stockAfter,
+                  reason: `Recepcion de compra ${purchase._id}`,
+                  sourceType: "PURCHASE",
+                  sourceId: String(purchase._id),
+                  createdBy: req.user?._id,
+                },
+              ],
+              { session },
+            );
+          }
         }
       }
+
+      purchase.status = "RECEIVED";
 
       const accountEntries = [
         {

@@ -76,6 +76,7 @@ const UNIT_OPTIONS_ENUM = z.enum([
 ]);
 
 const presentationSchema = z.object({
+  _id: z.string().trim().optional(),
   sku: z.string().trim().optional(),
   barcode: z.string().trim().optional(),
   name: z.string().trim().min(1, "Nombre requerido"),
@@ -223,6 +224,7 @@ const updateRecipeBody = z.object({
 const purchaseItemBody = z.object({
   supplyItemId: objectId.optional(),
   productItemId: objectId.optional(),
+  presentationId: objectId.optional(),
   quantity: z.coerce.number().positive("Cantidad invalida"),
   unitCost: z.coerce.number().min(0, "Costo invalido"),
   lineTotal: z.coerce.number().min(0, "Subtotal invalido"),

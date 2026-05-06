@@ -10,6 +10,9 @@ const purchaseItemSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
     },
+    presentationId: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
     quantity: { type: Number, required: true },
     unitCost: { type: Number, required: true },
     lineTotal: { type: Number, required: true },

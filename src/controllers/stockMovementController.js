@@ -87,7 +87,7 @@ exports.getStockMovements = async (req, res) => {
     }
 
     const movements = await StockMovement.find(filter)
-      .populate("product", "name sku")
+      .populate("product", "name sku unitOfMeasure")
       .populate("order", "client")
       .sort({ createdAt: -1 })
       .limit(parsedLimit)
@@ -115,7 +115,7 @@ exports.getStockMovementById = async (req, res) => {
     })
       .populate(
         "product",
-        "name sku description price costPrice stock minStock category categories unitOfMeasure createdAt updatedAt",
+        "name sku description price costPrice stock minStock category categories unitOfMeasure presentations createdAt updatedAt",
       )
       .populate({
         path: "order",
@@ -168,7 +168,7 @@ exports.createStockMovement = async (req, res) => {
     }
 
     session.startTransaction();
-    const { product, type, quantity, reason, order, source } = req.body;
+    const { product, type, quantity, reason, order, source, presentationName, presentationId, presentationEquivalentQty, presentationUnitCost } = req.body;
 
     // Obtener el producto para calcular stockBefore y stockAfter
     const prod = await Product.findOne({
@@ -220,6 +220,10 @@ exports.createStockMovement = async (req, res) => {
       reason,
       order,
       source: source || "Dashboard",
+      presentationName,
+      presentationId,
+      presentationEquivalentQty,
+      presentationUnitCost,
     });
 
     await newMovement.save({ session });

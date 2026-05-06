@@ -22,7 +22,10 @@ const stockMovementSchema = new mongoose.Schema(
     stockBefore: { type: Number, required: true },
     stockAfter: { type: Number, required: true },
     reason: { type: String }, // Razón detallada (ej: "Compra a proveedor", "Se echó a perder")
-    presentationName: { type: String }, // Nombre de la presentación vendida (trazabilidad)
+    presentationName: { type: String }, // Nombre de la presentación (trazabilidad)
+    presentationId: { type: mongoose.Schema.Types.ObjectId }, // ID de la presentación (trazabilidad)
+    presentationEquivalentQty: { type: Number }, // Cantidad equivalente de la presentación (ej: 20 kg por bolsa)
+    presentationUnitCost: { type: Number }, // Costo por unidad de presentación (ej: $10.000 por bolsa)
     order: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order", // Opcional, solo si el movimiento fue por una venta

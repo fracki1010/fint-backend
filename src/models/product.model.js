@@ -38,7 +38,7 @@ const productSchema = new mongoose.Schema(
     barcode: { type: String },
     name: { type: String, required: true },
     description: { type: String },
-    price: { type: Number, required: true }, // Precio de venta sugerido
+    price: { type: Number, default: 0 }, // Precio de venta sugerido (0 si se define en presentaciones)
     costPrice: { type: Number }, // Costo de compra
     stock: { type: Number, default: 0 },
     minStock: { type: Number, default: 0 }, // Para alertas de escasez
@@ -60,7 +60,13 @@ const productSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-productSchema.index({ tenant: 1, name: 1 }, { unique: true });
+productSchema.index(
+  { tenant: 1, name: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isActive: { $ne: false } },
+  },
+);
 productSchema.index(
   { tenant: 1, sku: 1 },
   {
