@@ -38,6 +38,7 @@ npm run dev
 | `npm run start:worker` | Worker en producción |
 | `npm test` | Tests con Vitest |
 | `npm run lint` | Chequeo de sintaxis |
+| `npm run cleanup:vouchers` | Limpieza de PDFs antiguos (ver scripts/cleanupOldVouchers.js) |
 
 ---
 
@@ -122,19 +123,86 @@ fint-backend/
 ├── whatsapp-worker/
 │   ├── server.js                # Entry point del worker
 │   └── handler.js               # Cliente WhatsApp (whatsapp-web.js)
+├── scripts/
+│   └── cleanupOldVouchers.js    # Limpieza automática de PDFs antiguos
+├── docs/
+│   └── VOUCHERS_API.md          # Documentación API de comprobantes
 └── src/
     ├── app.js                   # Factory de Express
     ├── config/
     ├── controllers/
     │   ├── whatsappController.js  # Endpoints + webhook handler
-    │   └── iaController.js        # Lógica de IA (Llama 70B)
+    │   ├── iaController.js        # Lógica de IA (Llama 70B)
+    │   └── voucherController.js   # API de comprobantes (Facturas, Remitos, Recibos)
     ├── services/
     │   ├── whatsappService.js     # Proxy HTTP al worker
-    │   └── groqService.js         # Groq API (IA + Whisper)
+    │   ├── groqService.js         # Groq API (IA + Whisper)
+    │   └── voucherService.js      # Generación y gestión de comprobantes
     ├── models/
+    │   ├── voucher.model.js       # Modelo de comprobantes
+    │   ├── voucherCounter.model.js # Contadores de numeración
+    │   └── ...
     ├── routes/
     ├── middlewares/
     └── utils/
+    │   └── voucherPdf.js          # Generación de PDFs con PDFKit
+```
+
+---
+
+## Feature: Sistema de Comprobantes (Multiple Vouchers)
+
+El sistema permite generar tres tipos de comprobantes fiscales por orden:
+
+- **Factura (Invoice)** - Documento fiscal completo
+- **Remito (Delivery Note)** - Comprobante de entrega
+- **Recibo (Receipt)** - Comprobante de pago
+
+### Características
+
+- Numeración secuencial atómica (previene duplicados en concurrencia)
+- Generación paralela de múltiples comprobantes
+- PDFs con diseño profesional usando PDFKit
+- Anulación con motivo (auditoría)
+- Reinicio anual de numeración opcional
+- Prefijos personalizables por tipo
+
+### API Endpoints
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/orders/:id/vouchers` | Generar comprobantes para una orden |
+| GET | `/orders/:id/vouchers` | Listar comprobantes de una orden |
+| GET | `/vouchers` | Listar todos los comprobantes (con filtros) |
+| GET | `/vouchers/:id/download` | Descargar PDF |
+| POST | `/vouchers/:id/void` | Anular comprobante |
+| GET | `/vouchers/next-number` | Consultar siguiente número |
+
+Ver [docs/VOUCHERS_API.md](docs/VOUCHERS_API.md) para documentación completa.
+
+### Testing
+
+```bash
+# Tests unitarios del servicio de comprobantes
+npm test -- tests/services/voucherService.test.js
+
+# Tests de integración
+npm test -- tests/integration/vouchers.test.js
+```
+
+### Mantenimiento
+
+Limpieza automática de PDFs antiguos (>2 años):
+
+```bash
+# Simulación (dry run)
+node scripts/cleanupOldVouchers.js --dry-run
+
+# Ejecución real
+node scripts/cleanupOldVouchers.js
+
+# Personalizar días
+node scripts/cleanupOldVouchers.js --older-than-days=365
 ```
 
 ---

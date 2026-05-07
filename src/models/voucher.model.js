@@ -69,11 +69,40 @@ const voucherSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// Compound indexes for common queries
-voucherSchema.index({ tenant: 1, order: 1 });
-voucherSchema.index({ tenant: 1, type: 1, createdAt: -1 });
+// Compound indexes for common queries and performance optimization
+
+// Index for order lookups with type (used when fetching vouchers for an order)
+voucherSchema.index({ order: 1, type: 1 });
+
+// Unique index to prevent duplicate voucher numbers per tenant
 voucherSchema.index({ tenant: 1, number: 1 }, { unique: true });
-voucherSchema.index({ tenant: 1, status: 1 });
-voucherSchema.index({ order: 1, type: 1 }, { unique: true, partialFilterExpression: { status: "active" } });
+
+// Index for listing vouchers by tenant with sorting by creation date
+voucherSchema.index({ tenant: 1, createdAt: -1 });
+
+// Index for filtering by tenant, type, and sequential number (counter verification)
+voucherSchema.index({ tenant: 1, type: 1, sequentialNumber: 1 });
+
+// Index for status-based queries with date sorting
+voucherSchema.index({ tenant: 1, status: 1, createdAt: -1 });
+
+// Index for year-based queries (used in annual reset and reporting)
+voucherSchema.index({ tenant: 1, year: 1, type: 1 });
+
+// Compound index for unique active voucher per order/type combination
+// This prevents multiple active vouchers of the same type for an order
+voucherSchema.index(
+  { order: 1, type: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: "active" },
+  }
+);
+
+// Index for metadata-based searches (e.g., finding vouchers by client name)
+voucherSchema.index({ tenant: 1, "metadata.clientName": 1 });
+
+// Index for voidedAt date (used in cleanup and audit queries)
+voucherSchema.index({ status: 1, voidedAt: -1 }, { sparse: true });
 
 module.exports = mongoose.model("Voucher", voucherSchema);

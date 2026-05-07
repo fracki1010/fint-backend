@@ -101,7 +101,7 @@ const createAccountCharge = async ({ tenantId, clientId, orderId, amount, actorU
   }], { session });
 };
 
-const createAccountPayment = async ({ tenantId, clientId, orderId, amount, actorUserId, session }) => {
+const createAccountPayment = async ({ tenantId, clientId, orderId, amount, paymentMethod, actorUserId, session }) => {
   if (!clientId || !amount) return;
   const existing = await ClientAccountEntry.findOne({ tenant: tenantId, order: orderId, type: "PAYMENT" }).session(session);
   if (existing) return;
@@ -112,6 +112,7 @@ const createAccountPayment = async ({ tenantId, clientId, orderId, amount, actor
     type: "PAYMENT",
     amount,
     sign: -1,
+    paymentMethod: paymentMethod || "",
     order: orderId,
     notes: "Cobro automático por venta pagada",
     createdBy: actorUserId || null,
@@ -538,6 +539,7 @@ exports.createOrder = async (req, res) => {
       salesStatus,
       paymentStatus,
       deliveryStatus,
+      paymentMethod,
     } = req.body;
     const orderSettings = await getOrderSettings(tenantId);
 
@@ -632,7 +634,7 @@ exports.createOrder = async (req, res) => {
     if (newOrder.client && newOrder.totalAmount > 0 && newOrder.salesStatus !== "Cancelada") {
       await createAccountCharge({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, actorUserId, session });
       if (newOrder.paymentStatus === "Pagado") {
-        await createAccountPayment({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, actorUserId, session });
+        await createAccountPayment({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, paymentMethod, actorUserId, session });
       }
     }
 
@@ -860,7 +862,7 @@ exports.updateOrder = async (req, res) => {
       if (justCancelled) {
         await reverseOrderAccountEntries({ tenantId, orderId: order._id, actorUserId, session });
       } else if (justPaid) {
-        await createAccountPayment({ tenantId, clientId: order.client, orderId: order._id, amount: order.totalAmount, actorUserId, session });
+        await createAccountPayment({ tenantId, clientId: order.client, orderId: order._id, amount: order.totalAmount, paymentMethod: req.body.paymentMethod, actorUserId, session });
       }
     }
 

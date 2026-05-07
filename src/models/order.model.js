@@ -58,6 +58,12 @@ const orderSchema = new mongoose.Schema(
       enum: ["WhatsApp", "Dashboard"],
       default: "WhatsApp",
     },
+    cashClosing: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CashClosing",
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true },
 );

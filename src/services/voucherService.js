@@ -7,6 +7,7 @@ const Client = require("../models/client.model");
 const Setting = require("../models/setting.model");
 const { generateVoucherPdf, buildVoucherFilePath } = require("../utils/voucherPdf");
 const { HttpError } = require("../utils/http");
+const { logError } = require("../utils/logger");
 
 // Default prefixes by voucher type
 const DEFAULT_PREFIXES = {
@@ -52,33 +53,51 @@ const getOrCreateCounter = async (tenantId, type, year = new Date().getFullYear(
 const getNextNumber = async (type, tenantId) => {
   const currentYear = new Date().getFullYear();
 
-  // Use atomic operation to increment counter
-  const counter = await VoucherCounter.findOneAndUpdate(
-    { tenant: tenantId, type, year: currentYear },
-    [
-      {
-        $set: {
-          // Reset counter if year changed
-          lastNumber: {
-            $cond: {
-              if: { $eq: ["$year", currentYear] },
-              then: { $add: ["$lastNumber", 1] },
-              else: 1,
-            },
-          },
-          year: currentYear,
-          prefix: {
-            $ifNull: ["$prefix", DEFAULT_PREFIXES[type] || "DOC-"],
-          },
-        },
-      },
-    ],
-    {
-      new: true,
-      upsert: true,
-      setDefaultsOnInsert: true,
-    },
-  );
+  // First, try to find existing counter for current year
+  let counter = await VoucherCounter.findOne({
+    tenant: tenantId,
+    type,
+    year: currentYear,
+  });
+
+  if (counter) {
+    // Increment existing counter atomically
+    counter = await VoucherCounter.findOneAndUpdate(
+      { _id: counter._id },
+      { $inc: { lastNumber: 1 } },
+      { new: true }
+    );
+  } else {
+    // Create new counter for this year
+    // Check if there's a counter from a previous year to get the prefix
+    const oldCounter = await VoucherCounter.findOne({
+      tenant: tenantId,
+      type,
+    }).sort({ year: -1 });
+
+    const prefix = oldCounter?.prefix || DEFAULT_PREFIXES[type] || "DOC-";
+
+    try {
+      counter = await VoucherCounter.create({
+        tenant: tenantId,
+        type,
+        year: currentYear,
+        prefix,
+        lastNumber: 1,
+      });
+    } catch (error) {
+      // If duplicate key error, another request created it - fetch and increment
+      if (error.code === 11000) {
+        counter = await VoucherCounter.findOneAndUpdate(
+          { tenant: tenantId, type, year: currentYear },
+          { $inc: { lastNumber: 1 } },
+          { new: true }
+        );
+      } else {
+        throw error;
+      }
+    }
+  }
 
   const sequentialNumber = counter.lastNumber;
   const fullNumber = `${counter.prefix}${String(sequentialNumber).padStart(6, "0")}`;
@@ -234,11 +253,19 @@ const generateVouchers = async (orderId, types, userId, options = {}) => {
 
   // Generate all vouchers in parallel
   const voucherPromises = types.map((type) =>
-    generateVoucher(orderId, type, userId, options).catch((error) => ({
-      type,
-      error: error.message,
-      success: false,
-    })),
+    generateVoucher(orderId, type, userId, options).catch((error) => {
+      logError("voucher_generation_failed", {
+        orderId,
+        type,
+        error: error.message,
+        stack: error.stack,
+      });
+      return {
+        type,
+        error: error.message,
+        success: false,
+      };
+    }),
   );
 
   const results = await Promise.all(voucherPromises);

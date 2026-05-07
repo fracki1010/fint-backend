@@ -95,7 +95,7 @@ exports.getVouchersByOrder = async (req, res) => {
     return res.json({
       success: true,
       count: vouchers.length,
-      data: vouchers,
+      vouchers: vouchers,
     });
   } catch (error) {
     return handleServerError(res, error, "Error al obtener comprobantes");
