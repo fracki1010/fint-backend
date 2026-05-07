@@ -1,4 +1,5 @@
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
+const Purchase = require("../models/purchase.model");
 const { sendError, handleServerError } = require("../utils/http");
 
 const signByType = (type) => {
@@ -12,18 +13,63 @@ const buildAccountFilter = (tenantId, supplierId) => ({
   supplier: supplierId,
 });
 
+const computeAging = (entries) => {
+  const now = new Date();
+  const aging = { current: 0, days30: 0, days60: 0, days90plus: 0 };
+
+  entries
+    .filter((e) => e.type === "CHARGE" && e.sign > 0)
+    .forEach((entry) => {
+      const entryDate = new Date(entry.date);
+      const diffDays = Math.floor((now - entryDate) / (1000 * 60 * 60 * 24));
+
+      if (diffDays >= 90) aging.days90plus += entry.amount;
+      else if (diffDays >= 60) aging.days60 += entry.amount;
+      else if (diffDays >= 30) aging.days30 += entry.amount;
+      else aging.current += entry.amount;
+    });
+
+  return aging;
+};
+
 exports.getSupplierAccount = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
-    const filter = buildAccountFilter(tenantId, req.params.id);
+    const supplierId = req.params.id;
+    const filter = buildAccountFilter(tenantId, supplierId);
 
     const entries = await SupplierAccountEntry.find(filter)
       .populate("purchase", "status total date")
       .sort({ date: 1, createdAt: 1 });
 
     const balance = entries.reduce((acc, entry) => acc + entry.amount * entry.sign, 0);
+    const totalDebt = entries
+      .filter((e) => e.sign > 0)
+      .reduce((acc, e) => acc + e.amount, 0);
+    const totalPaid = entries
+      .filter((e) => e.sign < 0)
+      .reduce((acc, e) => acc + e.amount, 0);
+    const aging = computeAging(entries);
 
-    return res.json({ entries, balance });
+    // Get pending purchases (not fully paid)
+    const pendingPurchases = await Purchase.find({
+      tenant: tenantId,
+      supplier: supplierId,
+      paymentStatus: { $ne: "PAID" },
+      status: { $in: ["CONFIRMED", "RECEIVED"] },
+    })
+      .select("date total paidAmount paymentStatus paymentCondition status")
+      .sort({ date: -1 })
+      .lean();
+
+    return res.json({
+      entries,
+      balance,
+      totalDebt,
+      totalPaid,
+      aging,
+      pendingPurchases,
+    });
   } catch (error) {
     return handleServerError(res, error, "Error al obtener cuenta corriente");
   }

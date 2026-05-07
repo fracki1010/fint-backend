@@ -60,6 +60,12 @@ const tenantSchema = new mongoose.Schema(
         "api_access",
         "advanced_reports",
         "multi_location",
+        "supplier_account",
+        "client_account",
+        "team_management",
+        "unlimited_products",
+        "unlimited_orders",
+        "banking",
       ],
     }],
     
