@@ -142,15 +142,18 @@ const createOrderBody = z.object({
     .optional(),
   salesStatus: z.enum(["Pendiente", "Confirmada", "Cancelada"]).optional(),
   paymentStatus: z.enum(["Pendiente", "Parcial", "Pagado"]).optional(),
+  paymentMethod: z.string().trim().optional(),
   deliveryStatus: z.enum(["Pendiente", "Preparando", "Entregada"]).optional(),
   notes: z.string().trim().optional(),
   imageUrl: z.string().trim().optional(),
   source: z.enum(["WhatsApp", "Dashboard"]).optional(),
+  vouchersToGenerate: z.array(z.enum(["invoice", "delivery_note", "receipt"])).optional(),
 });
 
 const updateOrderBody = z.object({
   salesStatus: z.enum(["Pendiente", "Confirmada", "Cancelada"]).optional(),
   paymentStatus: z.enum(["Pendiente", "Parcial", "Pagado"]).optional(),
+  paymentMethod: z.string().trim().optional(),
   deliveryStatus: z.enum(["Pendiente", "Preparando", "Entregada"]).optional(),
   notes: z.string().trim().optional(),
 });
@@ -284,8 +287,8 @@ const includeInactiveQuery = z.object({
 });
 
 const priceTierConfigSchema = z.object({
-  names: z.record(z.string().trim()).optional(),
-  defaultDiscounts: z.record(z.coerce.number().min(0).max(100)).optional(),
+  names: z.any().optional(),
+  defaultDiscounts: z.any().optional(),
 }).optional();
 
 const settingUpdateBody = z.object({
@@ -302,9 +305,7 @@ const settingUpdateBody = z.object({
   whatsappEnabled: z.boolean().optional(),
   whatsappNumberFormat: z.enum(["AR", "INTL"]).optional(),
   whatsappAdminNumber: z.string().trim().optional(),
-  whatsappAuthorizedNumbers: z
-    .union([z.array(z.string().trim()), z.string().trim()])
-    .optional(),
+  whatsappAuthorizedNumbers: z.array(z.string().trim()).optional(),
   lowStockThreshold: z.coerce.number().min(0).optional(),
   orderPrefix: z.string().trim().optional(),
   allowDeliveryWithoutPayment: z.boolean().optional(),
@@ -345,10 +346,96 @@ const settingUpdateBody = z.object({
         .optional(),
     })
     .optional(),
-});
+}).passthrough();
 
 const notificationIdParam = z.object({
   id: objectId,
+});
+
+// ── Banking / Bank Reconciliation Schemas ──
+
+const bankAccountTypeEnum = z.enum(["checking", "savings"]);
+const bankCurrencyEnum = z.enum(["ARS", "USD", "EUR"]).default("ARS");
+const transactionTypeEnum = z.enum(["debit", "credit"]);
+const transactionStatusEnum = z.enum(["pending", "cleared", "reconciled"]);
+const matchedEntryTypeEnum = z.enum([
+  "ClientAccountEntry",
+  "SupplierAccountEntry",
+  "Order",
+]);
+
+const createBankAccountBody = z.object({
+  name: z.string().trim().min(1, "Nombre requerido").max(100, "Máximo 100 caracteres"),
+  bank: z.string().trim().min(1, "Banco requerido"),
+  accountNumber: z.string().trim().min(1, "Número de cuenta requerido"),
+  type: bankAccountTypeEnum.default("checking"),
+  currency: bankCurrencyEnum.default("ARS"),
+  currentBalance: z.coerce.number().min(0, "El saldo no puede ser negativo").default(0),
+  isActive: z.boolean().default(true),
+});
+
+const updateBankAccountBody = z.object({
+  name: z.string().trim().min(1, "Nombre requerido").max(100).optional(),
+  bank: z.string().trim().min(1, "Banco requerido").optional(),
+  accountNumber: z.string().trim().min(1, "Número de cuenta requerido").optional(),
+  type: bankAccountTypeEnum.optional(),
+  currency: bankCurrencyEnum.optional(),
+  currentBalance: z.coerce.number().min(0, "El saldo no puede ser negativo").optional(),
+  isActive: z.boolean().optional(),
+});
+
+const createBankTransactionBody = z.object({
+  bankAccount: objectId,
+  date: z.string().trim().min(1, "Fecha requerida"),
+  description: z
+    .string()
+    .trim()
+    .min(1, "Descripción requerida")
+    .max(500, "Máximo 500 caracteres"),
+  amount: z.coerce.number().refine((val) => val !== 0, {
+    message: "El monto no puede ser cero",
+  }),
+  type: transactionTypeEnum,
+  reference: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+});
+
+const updateBankTransactionBody = z.object({
+  date: z.string().trim().optional(),
+  description: z.string().trim().min(1).max(500).optional(),
+  amount: z.coerce.number().refine((val) => val !== 0, {
+    message: "El monto no puede ser cero",
+  }).optional(),
+  type: transactionTypeEnum.optional(),
+  reference: z.string().trim().optional(),
+  status: transactionStatusEnum.optional(),
+  notes: z.string().trim().optional(),
+});
+
+const matchTransactionBody = z.object({
+  matchedEntryType: matchedEntryTypeEnum,
+  matchedEntryId: objectId,
+});
+
+const unmatchTransactionBody = z.object({});
+
+const confirmReconciliationBody = z.object({
+  endDate: z.string().trim().min(1, "Fecha de cierre requerida"),
+});
+
+const bankTransactionQuery = z.object({
+  bankAccount: objectId.optional(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  status: transactionStatusEnum.optional(),
+  type: transactionTypeEnum.optional(),
+  page: z.coerce.number().positive().optional(),
+  limit: z.coerce.number().positive().max(100).optional(),
+});
+
+const reconciliationQuery = z.object({
+  dateFrom: z.string().trim().min(1, "Fecha desde requerida"),
+  dateTo: z.string().trim().min(1, "Fecha hasta requerida"),
 });
 
 module.exports = {
@@ -377,4 +464,13 @@ module.exports = {
   stockQuerySchema,
   settingUpdateBody,
   notificationIdParam,
+  createBankAccountBody,
+  updateBankAccountBody,
+  createBankTransactionBody,
+  updateBankTransactionBody,
+  matchTransactionBody,
+  unmatchTransactionBody,
+  confirmReconciliationBody,
+  bankTransactionQuery,
+  reconciliationQuery,
 };
