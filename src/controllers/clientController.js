@@ -166,6 +166,7 @@ exports.createClient = async (req, res) => {
       company: req.body.company?.trim() || undefined,
       notes: req.body.notes?.trim() || undefined,
       debt: req.body.debt || 0,
+      priceList: req.body.priceList || "retail",
       isActive: true,
       deletedAt: null,
     });
@@ -247,6 +248,10 @@ exports.updateClient = async (req, res) => {
       notes:
         req.body.notes !== undefined ? req.body.notes?.trim() || undefined : client.notes,
       debt: req.body.debt ?? client.debt,
+      priceList:
+        req.body.priceList !== undefined
+          ? req.body.priceList || "retail"
+          : client.priceList,
     });
 
     await client.save();

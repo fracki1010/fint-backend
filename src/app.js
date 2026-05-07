@@ -39,6 +39,7 @@ function createApp(options = {}) {
   app.use("/api/clients", authMiddleware, require("./routes/clientRoutes"));
   app.use("/api/products", authMiddleware, require("./routes/productRoutes"));
   app.use("/api/orders", authMiddleware, require("./routes/orderRoutes"));
+  app.use("/api/vouchers", authMiddleware, require("./routes/voucher.routes"));
   app.use("/api/settings", authMiddleware, require("./routes/settingRoutes"));
   app.use("/api/tenant", authMiddleware, require("./routes/tenantRoutes"));
   app.use(

@@ -31,4 +31,14 @@ router.post("/:id/account/payment", validateRequest({ params: idParam }), client
 router.post("/:id/account/entry", validateRequest({ params: idParam }), clientAccountController.createEntry);
 router.get("/:id/account/statement", validateRequest({ params: idParam }), clientAccountController.getClientStatement);
 
+// ── Payment Allocation (PR 1: Core Reconciliation) ──────────────────────
+router.post("/:id/account/allocate", validateRequest({ params: idParam }), clientAccountController.allocatePayment);
+router.get("/:id/account/balance", validateRequest({ params: idParam }), clientAccountController.getClientBalance);
+router.get("/:id/account/pending-charges", validateRequest({ params: idParam }), clientAccountController.getPendingCharges);
+
+// ── Aging & Credit (PR 2: Aging & Reporting) ─────────────────────────────
+router.get("/:id/account/aging", validateRequest({ params: idParam }), clientAccountController.getClientAging);
+router.get("/:id/account/credit-status", validateRequest({ params: idParam }), clientAccountController.getClientCreditStatus);
+router.get("/account/aging-report", clientAccountController.getAllClientsAging);
+
 module.exports = router;

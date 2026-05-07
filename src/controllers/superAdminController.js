@@ -1,5 +1,6 @@
 const Tenant = require("../models/tenant.model");
 const User = require("../models/user.model");
+const Setting = require("../models/setting.model");
 const { Product } = require("../models/product.model");
 const Order = require("../models/order.model");
 const AuditLog = require("../models/auditLog.model");
@@ -111,6 +112,9 @@ const getTenantById = async (req, res) => {
       role: "admin" 
     }).select("fullName email phone").lean();
 
+    // Get settings for supportEmail
+    const settings = await Setting.findOne({ tenant: tenant._id }).select("supportEmail").lean();
+
     // Get basic stats
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -149,6 +153,9 @@ const getTenantById = async (req, res) => {
         },
       },
       adminUser,
+      settings: {
+        supportEmail: settings?.supportEmail || "",
+      },
       stats: {
         totalUsers,
         totalProducts,
@@ -177,6 +184,7 @@ const createTenant = async (req, res) => {
       passwordType = "auto", // "auto" or "custom"
       customPassword,
       sendWelcomeEmail = false,
+      supportEmail,
       notes,
     } = req.body;
 
@@ -240,6 +248,24 @@ const createTenant = async (req, res) => {
       role: "admin",
       tenant: tenant._id,
       isActive: true,
+    });
+
+    // Create settings with supportEmail
+    await Setting.create({
+      tenant: tenant._id,
+      storeName: businessName,
+      email: adminEmail,
+      supportEmail: supportEmail || "",
+      admin: {
+        fullName: adminName,
+        role: "Administrador",
+        email: adminEmail,
+        phone: adminPhone || "",
+        company: {
+          name: businessName,
+          email: supportEmail || adminEmail,
+        },
+      },
     });
 
     // Send welcome email if requested (best-effort, don't break tenant creation)

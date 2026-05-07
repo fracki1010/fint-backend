@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Client = require("../models/client.model");
 const Order = require("../models/order.model");
 const { Product } = require("../models/product.model");
@@ -7,7 +8,9 @@ const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
 const InventorySnapshot = require("../models/inventorySnapshot.model");
 const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
+const ClientAccountEntry = require("../models/clientAccountEntry.model");
 const { handleServerError } = require("../utils/http");
+const { getAgingReport } = require("../services/accountService");
 
 const buildStartOfDay = (date = new Date()) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -870,5 +873,184 @@ exports.captureInventorySnapshot = async (req, res) => {
       error,
       "Error al capturar snapshot de inventario",
     );
+  }
+};
+
+// ── Receivables Analytics (PR 2: Aging & Reporting) ──────────────────────
+
+exports.getReceivables = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+
+    // Get aging report summary
+    const agingReport = await getAgingReport(tenantId);
+
+    // Get total receivables from all pending CHARGE entries
+    const receivablesAgg = await ClientAccountEntry.aggregate([
+      {
+        $match: {
+          tenant: new mongoose.Types.ObjectId(tenantId),
+          type: { $in: ["CHARGE", "DEBIT_NOTE"] },
+          $or: [
+            { status: { $in: ["pending", "partial"] } },
+            { status: null },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalReceivables: {
+            $sum: {
+              $cond: {
+                if: { $gt: ["$remainingAmount", 0] },
+                then: "$remainingAmount",
+                else: {
+                  $subtract: [
+                    "$amount",
+                    { $sum: { $ifNull: ["$allocations.amount", []] } },
+                  ],
+                },
+              },
+            },
+          },
+          totalEntries: { $sum: 1 },
+        },
+      },
+    ]);
+
+    // Get top overdue clients (sorted by overdue amount)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const topOverdueClients = await ClientAccountEntry.aggregate([
+      {
+        $match: {
+          tenant: new mongoose.Types.ObjectId(tenantId),
+          type: { $in: ["CHARGE", "DEBIT_NOTE"] },
+          $or: [
+            { status: { $in: ["pending", "partial"] } },
+            { status: null },
+          ],
+          dueDate: { $exists: true, $ne: null, $lt: today },
+        },
+      },
+      {
+        $addFields: {
+          effectiveRemaining: {
+            $cond: {
+              if: { $gt: ["$remainingAmount", 0] },
+              then: "$remainingAmount",
+              else: {
+                $subtract: [
+                  "$amount",
+                  { $sum: { $ifNull: ["$allocations.amount", []] } },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$client",
+          overdueAmount: { $sum: "$effectiveRemaining" },
+          overdueCount: { $sum: 1 },
+          oldestDueDate: { $min: "$dueDate" },
+        },
+      },
+      { $match: { overdueAmount: { $gt: 0 } } },
+      { $sort: { overdueAmount: -1 } },
+      { $limit: 5 },
+      {
+        $lookup: {
+          from: "clients",
+          localField: "_id",
+          foreignField: "_id",
+          as: "clientInfo",
+        },
+      },
+      {
+        $unwind: {
+          path: "$clientInfo",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $project: {
+          clientId: "$_id",
+          clientName: { $ifNull: ["$clientInfo.name", "Unknown"] },
+          clientPhone: { $ifNull: ["$clientInfo.phone", ""] },
+          overdueAmount: 1,
+          overdueCount: 1,
+          oldestDueDate: 1,
+          daysOverdue: {
+            $floor: {
+              $divide: [
+                { $subtract: [today, "$oldestDueDate"] },
+                1000 * 60 * 60 * 24,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    // Count clients at/near credit limit
+    const clientsWithLimit = await Client.find({
+      tenant: tenantId,
+      creditLimit: { $gt: 0 },
+    }).select("_id name creditLimit");
+
+    const creditAlerts = [];
+    for (const client of clientsWithLimit) {
+      const balanceAgg = await ClientAccountEntry.aggregate([
+        {
+          $match: {
+            tenant: new mongoose.Types.ObjectId(tenantId),
+            client: client._id,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            balance: { $sum: { $multiply: ["$amount", "$sign"] } },
+          },
+        },
+      ]);
+
+      const balance = balanceAgg[0]?.balance || 0;
+      const utilization = (balance / client.creditLimit) * 100;
+
+      if (utilization >= 80) {
+        creditAlerts.push({
+          clientId: client._id,
+          clientName: client.name,
+          creditLimit: client.creditLimit,
+          currentBalance: balance,
+          utilizationPercentage: Math.round(utilization * 100) / 100,
+          status: balance > client.creditLimit ? "over_limit" : "near_limit",
+        });
+      }
+    }
+
+    // Sort credit alerts by utilization (highest first)
+    creditAlerts.sort((a, b) => b.utilizationPercentage - a.utilizationPercentage);
+
+    return res.json({
+      summary: {
+        totalReceivables: receivablesAgg[0]?.totalReceivables || 0,
+        totalEntries: receivablesAgg[0]?.totalEntries || 0,
+        overdueAmount: agingReport.totals["1-30"] + agingReport.totals["31-60"] + 
+                       agingReport.totals["61-90"] + agingReport.totals["90+"],
+        currentAmount: agingReport.totals.current,
+      },
+      agingSummary: agingReport.totals,
+      topOverdueClients,
+      creditAlerts: creditAlerts.slice(0, 5),
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener cuentas por cobrar");
   }
 };

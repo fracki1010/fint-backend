@@ -12,7 +12,8 @@
     "smoke": "node scripts/smoke.cjs",
     "ci": "npm run lint && npm run test && npm run smoke",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "migrate:prices-to-tiers": "node migrations/migrate-prices-to-tiers.js"
   },
   "keywords": [],
   "author": "",

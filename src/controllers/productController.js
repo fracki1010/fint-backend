@@ -51,6 +51,27 @@ const normalizePresentations = (presentations) => {
     .filter((p) => p.name);
 };
 
+const normalizePriceTiers = (priceTiers) => {
+  if (!priceTiers || typeof priceTiers !== "object") return undefined;
+
+  const normalized = {};
+
+  if (priceTiers.retail !== undefined) {
+    const val = Number(priceTiers.retail);
+    normalized.retail = Number.isFinite(val) && val >= 0 ? val : null;
+  }
+  if (priceTiers.wholesale !== undefined) {
+    const val = Number(priceTiers.wholesale);
+    normalized.wholesale = Number.isFinite(val) && val >= 0 ? val : null;
+  }
+  if (priceTiers.distributor !== undefined) {
+    const val = Number(priceTiers.distributor);
+    normalized.distributor = Number.isFinite(val) && val >= 0 ? val : null;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+};
+
 const validatePresentationCollisions = async (
   tenantId,
   presentations,
@@ -174,6 +195,7 @@ const buildProductPayload = async (tenantId, payload, currentProductId = null) =
     purchaseEquivalentQty: payload.purchaseEquivalentQty ?? undefined,
     costLocked: payload.costLocked ?? undefined,
     presentations: normalizePresentations(payload.presentations),
+    priceTiers: normalizePriceTiers(payload.priceTiers),
     isActive: true,
     deletedAt: null,
   };

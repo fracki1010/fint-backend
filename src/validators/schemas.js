@@ -51,6 +51,7 @@ const clientPayloadBase = {
   company: z.string().trim().optional(),
   notes: z.string().trim().optional(),
   debt: z.coerce.number().min(0, "La deuda no puede ser negativa").optional(),
+  priceList: z.enum(["retail", "wholesale", "distributor"]).optional(),
 };
 
 const createClientBody = z.object({
@@ -86,6 +87,12 @@ const presentationSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+const priceTiersSchema = z.object({
+  retail: z.coerce.number().min(0, "Precio minorista inválido").optional().nullable(),
+  wholesale: z.coerce.number().min(0, "Precio mayorista inválido").optional().nullable(),
+  distributor: z.coerce.number().min(0, "Precio distribuidor inválido").optional().nullable(),
+}).optional();
+
 const productPayloadBase = {
   sku: z.string().trim().optional(),
   barcode: z.string().trim().optional(),
@@ -107,6 +114,7 @@ const productPayloadBase = {
     .positive("Cantidad equivalente debe ser positiva")
     .optional(),
   presentations: z.array(presentationSchema).optional(),
+  priceTiers: priceTiersSchema,
 };
 
 const createProductBody = z.object({
@@ -275,6 +283,11 @@ const includeInactiveQuery = z.object({
   limit: numericString,
 });
 
+const priceTierConfigSchema = z.object({
+  names: z.record(z.string().trim()).optional(),
+  defaultDiscounts: z.record(z.coerce.number().min(0).max(100)).optional(),
+}).optional();
+
 const settingUpdateBody = z.object({
   storeName: z.string().trim().optional(),
   taxId: z.string().trim().optional(),
@@ -315,6 +328,7 @@ const settingUpdateBody = z.object({
   defaultDeliveryStatus: z
     .enum(["Pendiente", "Preparando", "Entregada"])
     .optional(),
+  priceTierConfig: priceTierConfigSchema,
   admin: z
     .object({
       fullName: z.string().trim().optional(),

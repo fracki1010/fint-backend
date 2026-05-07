@@ -135,10 +135,14 @@ async function sendEmail({ to, subject, html, text }) {
     throw new Error(`SMTP not configured: ${reason}`);
   }
 
+  // Always use support email as sender to maintain sender reputation and avoid spam
+  const senderEmail = process.env.SUPPORT_EMAIL || process.env.EMAIL_FROM || "noreply@padexa.online";
+  const senderName = process.env.EMAIL_FROM_NAME || "Fint Suite";
+
   try {
     const info = await transporter.sendMail({
-      from: `"Fint Suite" <${process.env.EMAIL_FROM || "noreply@padexa.online"}>`,
-      replyTo: process.env.EMAIL_REPLY_TO || "soporte@padexa.online",
+      from: `"${senderName}" <${senderEmail}>`,
+      replyTo: process.env.EMAIL_REPLY_TO || senderEmail,
       to,
       subject,
       text,

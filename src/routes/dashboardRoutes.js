@@ -7,4 +7,7 @@ router.get("/daily-sales", dashboardController.getDailySales);
 router.get("/optional-kpis", dashboardController.getOptionalKpis);
 router.post("/snapshots/capture", dashboardController.captureInventorySnapshot);
 
+// ── Receivables Analytics (PR 2: Aging & Reporting) ──────────────────────
+router.get("/receivables", dashboardController.getReceivables);
+
 module.exports = router;

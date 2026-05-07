@@ -15,6 +15,7 @@ const settingSchema = new mongoose.Schema(
     address: { type: String },
     phone: { type: String },
     email: { type: String },
+    supportEmail: { type: String }, // Email remitente para notificaciones
     invoiceTerms: { type: String, default: "" }, // Condiciones comerciales
     admin: {
       fullName: { type: String, default: "" },
@@ -67,6 +68,27 @@ const settingSchema = new mongoose.Schema(
       type: String,
       enum: ["Pendiente", "Preparando", "Entregada"],
       default: "Pendiente",
+    },
+    // Price tier configuration: custom names and default discounts per tier
+    priceTierConfig: {
+      names: {
+        type: Map,
+        of: String,
+        default: {
+          retail: "Minorista",
+          wholesale: "Mayorista",
+          distributor: "Distribuidor",
+        },
+      },
+      defaultDiscounts: {
+        type: Map,
+        of: Number,
+        default: {
+          retail: 0,
+          wholesale: 10,
+          distributor: 20,
+        },
+      },
     },
   },
   { timestamps: true },

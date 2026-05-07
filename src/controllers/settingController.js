@@ -55,6 +55,37 @@ const normalizeWhatsAppNumbers = (value, fallback = [], format = "AR") => {
   return [...new Set(normalized)];
 };
 
+const normalizePriceTierConfig = (input, fallback = {}) => {
+  if (!input || typeof input !== "object") return fallback;
+
+  const result = {};
+
+  // Normalize names
+  if (input.names && typeof input.names === "object") {
+    result.names = {};
+    for (const [key, value] of Object.entries(input.names)) {
+      if (["retail", "wholesale", "distributor"].includes(key)) {
+        result.names[key] = value?.toString().trim() || key;
+      }
+    }
+  }
+
+  // Normalize default discounts
+  if (input.defaultDiscounts && typeof input.defaultDiscounts === "object") {
+    result.defaultDiscounts = {};
+    for (const [key, value] of Object.entries(input.defaultDiscounts)) {
+      if (["retail", "wholesale", "distributor"].includes(key)) {
+        const numVal = Number(value);
+        result.defaultDiscounts[key] = Number.isFinite(numVal) && numVal >= 0 && numVal <= 100
+          ? numVal
+          : 0;
+      }
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : fallback;
+};
+
 const buildAdminPayload = (
   adminInput = {},
   fallback = {},
@@ -191,6 +222,16 @@ exports.updateSettings = async (req, res) => {
         updateData.orderPrefix !== undefined
           ? updateData.orderPrefix.toString().trim().toUpperCase() || "VTA"
           : updateData.orderPrefix,
+      priceTierConfig:
+        updateData.priceTierConfig !== undefined
+          ? normalizePriceTierConfig(
+              updateData.priceTierConfig,
+              settings?.priceTierConfig || {
+                names: { retail: "Minorista", wholesale: "Mayorista", distributor: "Distribuidor" },
+                defaultDiscounts: { retail: 0, wholesale: 10, distributor: 20 },
+              }
+            )
+          : undefined,
     };
 
     if (!settings) {

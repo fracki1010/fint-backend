@@ -54,6 +54,12 @@ const productSchema = new mongoose.Schema(
     purchaseEquivalentQty: { type: Number, default: 1, min: 0.001 },
     costLocked: { type: Boolean, default: false },
     presentations: { type: [presentationSchema], default: [] },
+    // Price tiers for different client types (retail, wholesale, distributor)
+    priceTiers: {
+      retail: { type: Number, min: 0, default: null },
+      wholesale: { type: Number, min: 0, default: null },
+      distributor: { type: Number, min: 0, default: null },
+    },
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },
   },

@@ -1,14 +1,76 @@
 const mongoose = require("mongoose");
 const Order = require("../models/order.model");
 const { Product } = require("../models/product.model");
+const Client = require("../models/client.model");
 const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
 const IdempotencyKey = require("../models/idempotencyKey.model");
 const ClientAccountEntry = require("../models/clientAccountEntry.model");
+const { checkCreditLimit } = require("../services/accountService");
 const {
   createAndDispatchNotification,
 } = require("../services/notificationService");
+const voucherService = require("../services/voucherService");
 const { HttpError, sendError, handleServerError } = require("../utils/http");
+
+// Valid price tier values
+const VALID_PRICE_TIERS = ["retail", "wholesale", "distributor"];
+
+/**
+ * Resolves the appropriate price for a product based on the client's price list tier.
+ * Price resolution priority: tier price → retail tier → legacy price → 0
+ *
+ * @param {Object} product - The product document with priceTiers
+ * @param {String} clientPriceList - The client's price list tier (retail/wholesale/distributor)
+ * @returns {Number} The resolved price
+ */
+const resolveProductPrice = (product, clientPriceList = "retail") => {
+  if (!product) return 0;
+
+  // Validate the price tier, fallback to retail if invalid
+  const tier = VALID_PRICE_TIERS.includes(clientPriceList) ? clientPriceList : "retail";
+
+  // Try to get the tier-specific price
+  const tierPrice = product.priceTiers?.[tier];
+  if (tierPrice !== null && tierPrice !== undefined && !Number.isNaN(tierPrice)) {
+    return Number(tierPrice);
+  }
+
+  // Fallback to retail tier price
+  const retailPrice = product.priceTiers?.retail;
+  if (retailPrice !== null && retailPrice !== undefined && !Number.isNaN(retailPrice)) {
+    return Number(retailPrice);
+  }
+
+  // Fallback to legacy price field
+  if (product.price !== null && product.price !== undefined && !Number.isNaN(product.price)) {
+    return Number(product.price);
+  }
+
+  // Final fallback
+  return 0;
+};
+
+/**
+ * Gets the client's price list tier. Returns 'retail' as default if client not found
+ * or has no priceList assigned.
+ *
+ * @param {String} clientId - The client ObjectId
+ * @param {mongoose.ClientSession} session - Mongoose session for transaction
+ * @returns {Promise<String>} The price list tier
+ */
+const getClientPriceList = async (clientId, session) => {
+  if (!clientId) return "retail";
+
+  try {
+    const client = await Client.findById(clientId).select("priceList").session(session).lean();
+    return client?.priceList || "retail";
+  } catch (error) {
+    // Log but don't fail - return default
+    console.warn("Failed to get client price list, using default", { clientId, error: error.message });
+    return "retail";
+  }
+};
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -17,6 +79,12 @@ const REVERSAL_SIGN = { CHARGE: -1, PAYMENT: 1, CREDIT_NOTE: 1, DEBIT_NOTE: -1 }
 
 const createAccountCharge = async ({ tenantId, clientId, orderId, amount, actorUserId, session }) => {
   if (!clientId || !amount) return;
+
+  // Calculate due date: created date + 30 days
+  const today = new Date();
+  const dueDate = new Date(today);
+  dueDate.setDate(dueDate.getDate() + 30);
+
   await ClientAccountEntry.create([{
     tenant: tenantId,
     client: clientId,
@@ -27,6 +95,9 @@ const createAccountCharge = async ({ tenantId, clientId, orderId, amount, actorU
     order: orderId,
     notes: "Cargo automático por venta",
     createdBy: actorUserId || null,
+    dueDate,
+    remainingAmount: amount,
+    status: "pending",
   }], { session });
 };
 
@@ -131,7 +202,7 @@ const buildStatePatch = (payload, currentOrder) => {
   return patch;
 };
 
-const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session) => {
+const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session, clientPriceList = "retail") => {
   const normalizedItems = [];
 
   for (const rawItem of items || []) {
@@ -150,7 +221,7 @@ const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session) => {
         _id: rawItem.productId,
         tenant: tenantId,
       })
-        .select("_id name costPrice")
+        .select("_id name costPrice price priceTiers")
         .session(session);
     }
 
@@ -159,7 +230,7 @@ const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session) => {
         name: rawItem.product,
         tenant: tenantId,
       })
-        .select("_id name costPrice")
+        .select("_id name costPrice price priceTiers")
         .session(session);
     }
 
@@ -167,6 +238,11 @@ const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session) => {
       normalized.productId = matchedProduct._id;
       normalized.product = matchedProduct.name;
       normalized.unitCostAtSale = Number(matchedProduct.costPrice) || 0;
+
+      // Apply price tier resolution if no explicit price provided in request
+      if (!rawItem.price && rawItem.price !== 0) {
+        normalized.price = resolveProductPrice(matchedProduct, clientPriceList);
+      }
     } else if (rawItem.productId) {
       normalized.productId = rawItem.productId;
     }
@@ -471,10 +547,15 @@ exports.createOrder = async (req, res) => {
       paymentStatus || (status === "Pagado" ? "Pagado" : "Pendiente");
     const nextDeliveryStatus =
       deliveryStatus || (status === "Entregado" ? "Entregada" : "Pendiente");
+
+    // Get client's price list tier for price resolution
+    const clientPriceList = await getClientPriceList(client, session);
+
     const normalizedItems = await resolveOrderItemsWithCostSnapshot(
       items,
       tenantId,
       session,
+      clientPriceList,
     );
 
     const newOrder = new Order({
@@ -513,6 +594,23 @@ exports.createOrder = async (req, res) => {
         "DELIVERY_WITHOUT_PAYMENT_NOT_ALLOWED",
         "No se permite entregar una venta sin pago completo",
       );
+    }
+
+    // Check credit limit if the order will create a charge
+    if (
+      client &&
+      totalAmount > 0 &&
+      nextSalesStatus !== "Cancelada" &&
+      nextPaymentStatus !== "Pagado"
+    ) {
+      const withinLimit = await checkCreditLimit(tenantId, client, totalAmount);
+      if (!withinLimit) {
+        throw new HttpError(
+          400,
+          "CREDIT_LIMIT_EXCEEDED",
+          "El monto de la orden excede el límite de crédito del cliente",
+        );
+      }
     }
 
     if (shouldApplyStockOnCreate) {
@@ -558,6 +656,25 @@ exports.createOrder = async (req, res) => {
     sessionClosed = true;
 
     const payload = await populateOrderWithMovements(newOrder._id, tenantId);
+
+    // Generate vouchers if requested (after transaction commits)
+    const { vouchersToGenerate } = req.body;
+    let generatedVouchers = null;
+    if (vouchersToGenerate && Array.isArray(vouchersToGenerate) && vouchersToGenerate.length > 0) {
+      try {
+        const voucherResult = await voucherService.generateVouchers(
+          newOrder._id,
+          vouchersToGenerate,
+          actorUserId,
+          { tenantId, skipIfExists: true }
+        );
+        generatedVouchers = voucherResult;
+      } catch (voucherError) {
+        // Log but don't fail the order creation
+        console.error("Error generating vouchers:", voucherError.message);
+      }
+    }
+
     if (actorUserId) {
       try {
         await createAndDispatchNotification({
@@ -571,7 +688,14 @@ exports.createOrder = async (req, res) => {
         // Si falla la notificación no debe romper la operación ya confirmada.
       }
     }
-    res.status(201).json(payload.order);
+
+    // Include vouchers in response if generated
+    const response = {
+      ...payload.order.toObject(),
+      vouchers: generatedVouchers?.vouchers || [],
+    };
+
+    res.status(201).json(response);
   } catch (error) {
     if (!sessionClosed) {
       try {
@@ -949,3 +1073,5 @@ exports.deleteOrder = async (req, res) => {
 
 exports.applyStockForOrder = applyStockForOrder;
 exports.revertStockForOrder = revertStockForOrder;
+exports.resolveProductPrice = resolveProductPrice;
+exports.getClientPriceList = getClientPriceList;
