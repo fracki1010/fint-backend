@@ -254,7 +254,15 @@ const createPurchaseBody = z.object({
   tax: z.coerce.number().min(0),
   total: z.coerce.number().min(0),
   notes: z.string().trim().optional(),
+  paymentMethod: z.string().trim().optional(),
   items: z.array(purchaseItemBody).min(1, "Debes incluir al menos un item"),
+});
+
+const payPurchaseBody = z.object({
+  amount: z.coerce.number().positive("Monto debe ser mayor a cero"),
+  paymentMethod: z.enum(["cash", "card", "transfer", "mercadopago", "check", "other"]),
+  reference: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
 });
 
 const supplierPaymentBody = z.object({
@@ -446,6 +454,7 @@ module.exports = {
   updateSupplyBody,
   supplyMovementBody,
   createPurchaseBody,
+  payPurchaseBody,
   supplierPaymentBody,
   supplierAccountEntryBody,
   supplierStatementQuery,

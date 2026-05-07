@@ -464,6 +464,7 @@ exports.receivePurchase = async (req, res) => {
           amount: purchase.total,
           sign: -1,
           purchase: purchase._id,
+          paymentMethod: purchase.paymentMethod || "transfer",
           reference: `Compra ${purchase._id}`,
           notes: "Pago automático por compra al contado",
           createdBy: req.user?._id,
@@ -554,5 +555,72 @@ exports.cancelPurchase = async (req, res) => {
     return res.json(hydrated);
   } catch (error) {
     return handleServerError(res, error, "Error al cancelar compra");
+  }
+};
+
+exports.payPurchase = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const { id } = req.params;
+    const { amount, paymentMethod, reference, notes } = req.body;
+
+    const purchase = await Purchase.findOne({ _id: id, tenant: tenantId });
+    if (!purchase) {
+      return sendError(res, {
+        status: 404,
+        code: "PURCHASE_NOT_FOUND",
+        message: "Compra no encontrada",
+      });
+    }
+    if (purchase.status === "DRAFT" || purchase.status === "CANCELLED") {
+      return sendError(res, {
+        status: 409,
+        code: "INVALID_STATUS",
+        message: "La compra no está en un estado válido para registrar pagos",
+      });
+    }
+    if (purchase.paymentStatus === "PAID") {
+      return sendError(res, {
+        status: 409,
+        code: "ALREADY_PAID",
+        message: "La compra ya está completamente pagada",
+      });
+    }
+
+    const remaining = purchase.total - purchase.paidAmount;
+    if (amount > remaining + 0.01) {
+      return sendError(res, {
+        status: 400,
+        code: "EXCEEDS_BALANCE",
+        message: "El monto excede el saldo pendiente",
+      });
+    }
+
+    const isFullPayment = Math.abs(amount - remaining) < 0.01;
+    purchase.paidAmount += amount;
+    purchase.paymentStatus = isFullPayment ? "PAID" : "PARTIAL";
+    if (isFullPayment || !purchase.paidAt) purchase.paidAt = new Date();
+    if (!purchase.paymentMethod) purchase.paymentMethod = paymentMethod;
+
+    await SupplierAccountEntry.create({
+      tenant: tenantId,
+      supplier: purchase.supplier,
+      date: new Date().toISOString().slice(0, 10),
+      type: "PAYMENT",
+      amount,
+      sign: -1,
+      purchase: purchase._id,
+      paymentMethod: paymentMethod || "",
+      reference: reference || "",
+      notes: notes || `Pago de compra ${purchase._id}`,
+      createdBy: req.user?._id,
+    });
+
+    await purchase.save();
+
+    const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
+    return res.json({ success: true, data: hydrated });
+  } catch (error) {
+    return handleServerError(res, error, "Error al registrar pago");
   }
 };

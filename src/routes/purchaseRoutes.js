@@ -5,6 +5,7 @@ const validateRequest = require("../middlewares/validateRequest");
 const {
   idParam,
   createPurchaseBody,
+  payPurchaseBody,
 } = require("../validators/schemas");
 
 const router = express.Router();
@@ -16,5 +17,6 @@ router.post("/", validateRequest({ body: createPurchaseBody }), purchaseControll
 router.post("/:id/confirm", validateRequest({ params: idParam }), purchaseController.confirmPurchase);
 router.post("/:id/receive", validateRequest({ params: idParam }), purchaseController.receivePurchase);
 router.post("/:id/cancel", validateRequest({ params: idParam }), purchaseController.cancelPurchase);
+router.post("/:id/pay", validateRequest({ params: idParam, body: payPurchaseBody }), purchaseController.payPurchase);
 
 module.exports = router;

@@ -72,6 +72,16 @@ const purchaseSchema = new mongoose.Schema(
     },
     receivedAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
+    paymentStatus: {
+      type: String,
+      enum: ["PENDING", "PAID", "PARTIAL"],
+      default: function () {
+        return this.paymentCondition === "CASH" ? "PAID" : "PENDING";
+      },
+    },
+    paymentMethod: { type: String, default: "" },
+    paidAt: { type: Date, default: null },
+    paidAmount: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
