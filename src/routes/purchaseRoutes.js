@@ -18,5 +18,6 @@ router.post("/:id/confirm", validateRequest({ params: idParam }), purchaseContro
 router.post("/:id/receive", validateRequest({ params: idParam }), purchaseController.receivePurchase);
 router.post("/:id/cancel", validateRequest({ params: idParam }), purchaseController.cancelPurchase);
 router.post("/:id/pay", validateRequest({ params: idParam, body: payPurchaseBody }), purchaseController.payPurchase);
+router.get("/:id/pdf", validateRequest({ params: idParam }), purchaseController.downloadPurchasePdf);
 
 module.exports = router;

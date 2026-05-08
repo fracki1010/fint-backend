@@ -252,6 +252,7 @@ const createPurchaseBody = z.object({
   supplierId: objectId,
   date: z.string().trim().min(1, "Fecha requerida"),
   paymentCondition: z.enum(["CASH", "CREDIT"]),
+  dueDate: z.string().trim().optional(),
   subtotal: z.coerce.number().min(0),
   tax: z.coerce.number().min(0),
   total: z.coerce.number().min(0),

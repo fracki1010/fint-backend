@@ -44,6 +44,7 @@ const purchaseSchema = new mongoose.Schema(
       enum: ["CASH", "CREDIT"],
       default: "CASH",
     },
+    dueDate: { type: String, default: "" },
     subtotal: { type: Number, required: true },
     tax: { type: Number, required: true, default: 0 },
     total: { type: Number, required: true },

@@ -225,6 +225,7 @@ exports.createPurchase = async (req, res) => {
       subtotal: req.body.subtotal,
       tax: req.body.tax,
       total: req.body.total,
+      dueDate: req.body.dueDate || "",
       costCenter: req.body.costCenter || null,
       notes: req.body.notes || "",
       items: req.body.items.map((item) => {
@@ -256,26 +257,33 @@ exports.confirmPurchase = async (req, res) => {
     const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId });
 
     if (!purchase) {
-      return sendError(res, {
-        status: 404,
-        code: "PURCHASE_NOT_FOUND",
-        message: "Compra no encontrada",
-      });
+      return sendError(res, { status: 404, code: "PURCHASE_NOT_FOUND", message: "Compra no encontrada" });
     }
 
     if (purchase.status !== "DRAFT") {
-      return sendError(res, {
-        status: 409,
-        code: "INVALID_STATUS_TRANSITION",
-        message: "Solo se puede confirmar una compra en estado DRAFT.",
-      });
+      return sendError(res, { status: 409, code: "INVALID_STATUS_TRANSITION", message: "Solo se puede confirmar una compra en estado DRAFT." });
     }
 
     purchase.status = "CONFIRMED";
     await purchase.save();
 
-    const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
+    // Create CHARGE entry in supplier account (debt recorded)
+    await SupplierAccountEntry.create({
+      tenant: tenantId,
+      supplier: purchase.supplier,
+      date: purchase.date,
+      type: "CHARGE",
+      amount: purchase.total,
+      sign: 1,
+      purchase: purchase._id,
+      reference: `Compra ${purchase._id}`,
+      notes: purchase.paymentCondition === "CREDIT"
+        ? `Cargo por compra a crédito${purchase.dueDate ? ` - Vence: ${purchase.dueDate}` : ""}`
+        : "Cargo por compra al contado",
+      createdBy: req.user?._id,
+    });
 
+    const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
     return res.json(hydrated);
   } catch (error) {
     return handleServerError(res, error, "Error al confirmar compra");
@@ -438,43 +446,6 @@ exports.receivePurchase = async (req, res) => {
       }
 
       purchase.status = "RECEIVED";
-
-      const accountEntries = [
-        {
-          tenant: tenantId,
-          supplier: purchase.supplier,
-          date: purchase.date,
-          type: "CHARGE",
-          amount: purchase.total,
-          sign: 1,
-          purchase: purchase._id,
-          reference: `Compra ${purchase._id}`,
-          notes: purchase.paymentCondition === "CREDIT"
-            ? "Cargo automático por compra a crédito"
-            : "Cargo automático por compra al contado",
-          createdBy: req.user?._id,
-        },
-      ];
-
-      if (purchase.paymentCondition === "CASH") {
-        accountEntries.push({
-          tenant: tenantId,
-          supplier: purchase.supplier,
-          date: purchase.date,
-          type: "PAYMENT",
-          amount: purchase.total,
-          sign: -1,
-          purchase: purchase._id,
-          paymentMethod: purchase.paymentMethod || "transfer",
-          reference: `Compra ${purchase._id}`,
-          notes: "Pago automático por compra al contado",
-          createdBy: req.user?._id,
-        });
-      }
-
-      await SupplierAccountEntry.create(accountEntries, { session, ordered: true });
-
-      purchase.status = "RECEIVED";
       purchase.receivedAt = new Date();
       await purchase.save({ session });
 
@@ -623,5 +594,27 @@ exports.payPurchase = async (req, res) => {
     return res.json({ success: true, data: hydrated });
   } catch (error) {
     return handleServerError(res, error, "Error al registrar pago");
+  }
+};
+
+exports.downloadPurchasePdf = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
+      .populate("supplier")
+      .lean();
+
+    if (!purchase) {
+      return sendError(res, { status: 404, code: "PURCHASE_NOT_FOUND", message: "Compra no encontrada" });
+    }
+
+    const { generatePurchasePdf } = require("../utils/purchasePdf");
+    const pdfBuffer = await generatePurchasePdf(purchase, purchase.supplier);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="compra_${purchase._id}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    return handleServerError(res, error, "Error al generar PDF");
   }
 };
