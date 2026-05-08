@@ -633,73 +633,55 @@ exports.createOrder = async (req, res) => {
 
     await newOrder.save({ session });
 
+    // Parallel: account charge + payment + idempotency key
+    const postSaveOps = [];
     if (newOrder.client && newOrder.totalAmount > 0 && newOrder.salesStatus !== "Cancelada") {
-      await createAccountCharge({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, actorUserId, session });
+      postSaveOps.push(createAccountCharge({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, actorUserId, session }));
       if (newOrder.paymentStatus === "Pagado") {
-        await createAccountPayment({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, paymentMethod, actorUserId, session });
+        postSaveOps.push(createAccountPayment({ tenantId, clientId: newOrder.client, orderId: newOrder._id, amount: newOrder.totalAmount, paymentMethod, actorUserId, session }));
       }
     }
-
     if (idempotencyKey) {
-      await IdempotencyKey.create(
-        [
-          {
-            tenant: tenantId,
-            scope: IDEMPOTENCY_SCOPES.CREATE,
-            key: idempotencyKey,
-            resourceType: "order",
-            resourceId: newOrder._id,
-          },
-        ],
-        { session },
+      postSaveOps.push(
+        IdempotencyKey.create([{ tenant: tenantId, scope: IDEMPOTENCY_SCOPES.CREATE, key: idempotencyKey, resourceType: "order", resourceId: newOrder._id }], { session })
       );
     }
+    await Promise.all(postSaveOps);
 
     await session.commitTransaction();
     session.endSession();
     sessionClosed = true;
 
-    const payload = await populateOrderWithMovements(newOrder._id, tenantId);
+    // Fire payload + vouchers + notification in parallel (outside transaction)
+    const [payload] = await Promise.all([
+      populateOrderWithMovements(newOrder._id, tenantId),
+    ]);
 
-    // Generate vouchers if requested (after transaction commits)
     const { vouchersToGenerate } = req.body;
-    let generatedVouchers = null;
+    // Fire-and-forget: voucher generation and notification don't block response
+    const postOps = [];
     if (vouchersToGenerate && Array.isArray(vouchersToGenerate) && vouchersToGenerate.length > 0) {
-      try {
-        const voucherResult = await voucherService.generateVouchers(
-          newOrder._id,
-          vouchersToGenerate,
-          actorUserId,
-          { tenantId, skipIfExists: true }
-        );
-        generatedVouchers = voucherResult;
-      } catch (voucherError) {
-        // Log but don't fail the order creation
-        console.error("Error generating vouchers:", voucherError.message);
-      }
+      postOps.push(
+        voucherService.generateVouchers(newOrder._id, vouchersToGenerate, actorUserId, { tenantId, skipIfExists: true })
+          .catch((err) => console.error("Error generating vouchers:", err.message))
+      );
     }
-
     if (actorUserId) {
-      try {
-        await createAndDispatchNotification({
-          userId: actorUserId,
-          type: "success",
+      postOps.push(
+        createAndDispatchNotification({
+          userId: actorUserId, type: "success",
           title: "Nueva venta registrada",
           message: `Se creó la orden ${payload.order.orderNumber || payload.order._id}.`,
           metadata: { orderId: payload.order._id },
-        });
-      } catch {
-        // Si falla la notificación no debe romper la operación ya confirmada.
-      }
+        }).catch(() => {})
+      );
     }
+    // Don't await - let them complete in background
+    Promise.all(postOps).catch(() => {});
 
     // Include vouchers in response if generated
-    const response = {
-      ...payload.order.toObject(),
-      vouchers: generatedVouchers?.vouchers || [],
-    };
-
-    res.status(201).json(response);
+    // Vouchers are generated in background — return empty array, frontend can refetch
+    res.status(201).json(payload.order.toObject ? payload.order.toObject() : payload.order);
   } catch (error) {
     if (!sessionClosed) {
       try {
