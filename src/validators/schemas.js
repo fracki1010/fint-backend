@@ -374,6 +374,39 @@ const notificationIdParam = z.object({
   id: objectId,
 });
 
+  // ── Quote / Presupuesto Schemas ──
+
+const quoteItemBody = z.object({
+  product: z.string().trim().min(1, "Producto requerido"),
+  productId: objectId.optional(),
+  presentationId: objectId.optional(),
+  quantity: z.coerce.number().positive("Cantidad inválida"),
+  price: z.coerce.number().min(0, "Precio inválido"),
+  lineTotal: z.coerce.number().min(0, "Subtotal inválido"),
+});
+
+const createQuoteBody = z.object({
+  client: objectId,
+  date: z.string().trim().min(1, "Fecha requerida"),
+  expirationDate: z.string().trim().optional(),
+  items: z.array(quoteItemBody).min(1, "Debes incluir al menos un item"),
+  subtotal: z.coerce.number().min(0, "Subtotal inválido"),
+  tax: z.coerce.number().min(0).default(0),
+  total: z.coerce.number().min(0, "Total inválido"),
+  notes: z.string().trim().optional(),
+});
+
+const updateQuoteBody = z.object({
+  client: objectId.optional(),
+  date: z.string().trim().optional(),
+  expirationDate: z.string().trim().optional(),
+  items: z.array(quoteItemBody).min(1).optional(),
+  subtotal: z.coerce.number().min(0).optional(),
+  tax: z.coerce.number().min(0).optional(),
+  total: z.coerce.number().min(0).optional(),
+  notes: z.string().trim().optional(),
+});
+
 // ── Banking / Bank Reconciliation Schemas ──
 
 const bankAccountTypeEnum = z.enum(["checking", "savings"]);
@@ -461,6 +494,9 @@ const reconciliationQuery = z.object({
 });
 
 module.exports = {
+  quoteItemBody,
+  createQuoteBody,
+  updateQuoteBody,
   recipeIngredientSchema,
   createRecipeBody,
   updateRecipeBody,

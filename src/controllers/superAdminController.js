@@ -20,13 +20,13 @@ const PLAN_CONFIGS = {
     maxUsers: 10,
     maxProducts: Infinity,
     maxOrdersPerMonth: Infinity,
-    features: ["financial_center", "recipes"],
+    features: ["financial_center", "recipes", "quotes"],
   },
   enterprise: {
     maxUsers: Infinity,
     maxProducts: Infinity,
     maxOrdersPerMonth: Infinity,
-    features: ["financial_center", "recipes", "advanced_reports", "api_access"],
+    features: ["financial_center", "recipes", "advanced_reports", "api_access", "quotes"],
   },
 };
 

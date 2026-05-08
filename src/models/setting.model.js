@@ -42,6 +42,8 @@ const settingSchema = new mongoose.Schema(
     lowStockThreshold: { type: Number, default: 5 },
     orderPrefix: { type: String, default: "VTA" },
     orderSequence: { type: Number, default: 0 },
+    quotePrefix: { type: String, default: "COT" },
+    quoteSequence: { type: Number, default: 0 },
     allowDeliveryWithoutPayment: { type: Boolean, default: false },
     stockDeductionMoment: {
       type: String,

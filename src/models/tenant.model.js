@@ -66,6 +66,7 @@ const tenantSchema = new mongoose.Schema(
         "unlimited_products",
         "unlimited_orders",
         "banking",
+        "quotes",
       ],
     }],
     
