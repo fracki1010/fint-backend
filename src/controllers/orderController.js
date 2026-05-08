@@ -540,6 +540,7 @@ exports.createOrder = async (req, res) => {
       paymentStatus,
       deliveryStatus,
       paymentMethod,
+      costCenter,
     } = req.body;
     const orderSettings = await getOrderSettings(tenantId);
 
@@ -569,6 +570,7 @@ exports.createOrder = async (req, res) => {
       imageUrl,
       source: source || "Dashboard",
       notes,
+      costCenter: costCenter || null,
       ...buildStatePatch(
         {
           salesStatus: nextSalesStatus,

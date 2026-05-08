@@ -64,6 +64,11 @@ const orderSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    costCenter: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CostCenter",
+      default: null,
+    },
   },
   { timestamps: true },
 );

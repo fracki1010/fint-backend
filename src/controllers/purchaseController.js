@@ -225,6 +225,7 @@ exports.createPurchase = async (req, res) => {
       subtotal: req.body.subtotal,
       tax: req.body.tax,
       total: req.body.total,
+      costCenter: req.body.costCenter || null,
       notes: req.body.notes || "",
       items: req.body.items.map((item) => {
         const mapped = {

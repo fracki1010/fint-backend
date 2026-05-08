@@ -148,6 +148,7 @@ const createOrderBody = z.object({
   imageUrl: z.string().trim().optional(),
   source: z.enum(["WhatsApp", "Dashboard"]).optional(),
   vouchersToGenerate: z.array(z.enum(["invoice", "delivery_note", "receipt"])).optional(),
+  costCenter: objectId.optional(),
 });
 
 const updateOrderBody = z.object({
@@ -156,6 +157,7 @@ const updateOrderBody = z.object({
   paymentMethod: z.string().trim().optional(),
   deliveryStatus: z.enum(["Pendiente", "Preparando", "Entregada"]).optional(),
   notes: z.string().trim().optional(),
+  costCenter: objectId.optional(),
 });
 
 const stockMovementBody = z.object({
@@ -255,7 +257,19 @@ const createPurchaseBody = z.object({
   total: z.coerce.number().min(0),
   notes: z.string().trim().optional(),
   paymentMethod: z.string().trim().optional(),
+  costCenter: objectId.optional(),
   items: z.array(purchaseItemBody).min(1, "Debes incluir al menos un item"),
+});
+
+const createCostCenterBody = z.object({
+  name: z.string().trim().min(1, "Nombre requerido"),
+  description: z.string().trim().optional(),
+});
+
+const updateCostCenterBody = z.object({
+  name: z.string().trim().optional(),
+  description: z.string().trim().optional(),
+  isActive: z.boolean().optional(),
 });
 
 const payPurchaseBody = z.object({
@@ -455,6 +469,8 @@ module.exports = {
   supplyMovementBody,
   createPurchaseBody,
   payPurchaseBody,
+  createCostCenterBody,
+  updateCostCenterBody,
   supplierPaymentBody,
   supplierAccountEntryBody,
   supplierStatementQuery,

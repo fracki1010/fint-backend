@@ -72,6 +72,11 @@ const purchaseSchema = new mongoose.Schema(
     },
     receivedAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
+    costCenter: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CostCenter",
+      default: null,
+    },
     paymentStatus: {
       type: String,
       enum: ["PENDING", "PAID", "PARTIAL"],
