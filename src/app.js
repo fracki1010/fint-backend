@@ -82,6 +82,12 @@ function createApp(options = {}) {
   app.post("/api/payments/webhook", express.json(), require("./controllers/paymentController").webhook);
   app.use("/api/cash-closing", authMiddleware, require("./routes/cashClosingRoutes"));
   app.use("/api/banking", authMiddleware, require("./routes/bankingRoutes"));
+  app.use(
+    "/api/treasury",
+    authMiddleware,
+    roleMiddleware.requireRole("admin", "contabilidad"),
+    require("./routes/treasuryRoutes"),
+  );
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "OK", message: "Servidor y Bot funcionando" });
