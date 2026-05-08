@@ -45,7 +45,16 @@ const toAuthResponse = async (user) => {
               maxProducts: serializeLimit(tenant.limits.maxProducts),
               maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
             } : undefined,
-            enabledFeatures: tenant.enabledFeatures,
+            enabledFeatures: (() => {
+              const PLAN_FEATURES = {
+                essential: [],
+                business: ["financial_center", "recipes", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking"],
+                enterprise: ["financial_center", "recipes", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking"],
+              };
+              const base = PLAN_FEATURES[tenant.plan] || [];
+              const extra = tenant.enabledFeatures || [];
+              return [...new Set([...base, ...extra])];
+            })(),
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }
@@ -167,7 +176,16 @@ exports.me = async (req, res) => {
             plan: tenant.plan,
             status: tenant.status,
             limits: tenant.limits,
-            enabledFeatures: tenant.enabledFeatures,
+            enabledFeatures: (() => {
+              const PLAN_FEATURES = {
+                essential: [],
+                business: ["financial_center", "recipes", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking"],
+                enterprise: ["financial_center", "recipes", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking"],
+              };
+              const base = PLAN_FEATURES[tenant.plan] || [];
+              const extra = tenant.enabledFeatures || [];
+              return [...new Set([...base, ...extra])];
+            })(),
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }
