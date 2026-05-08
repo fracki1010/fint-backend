@@ -498,35 +498,113 @@ exports.receivePurchase = async (req, res) => {
 };
 
 exports.cancelPurchase = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    const tenantId = req.user?.tenant;
-    const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId });
+    await session.withTransaction(async () => {
+      const tenantId = req.user?.tenant;
+      const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
+        .populate("items.product")
+        .populate("items.supply")
+        .session(session);
 
-    if (!purchase) {
-      return sendError(res, {
-        status: 404,
-        code: "PURCHASE_NOT_FOUND",
-        message: "Compra no encontrada",
-      });
-    }
+      if (!purchase) throw new Error("PURCHASE_NOT_FOUND");
+      if (purchase.status === "CANCELLED") throw new Error("ALREADY_CANCELLED");
 
-    if (!["DRAFT", "CONFIRMED"].includes(purchase.status)) {
-      return sendError(res, {
-        status: 409,
-        code: "INVALID_STATUS_TRANSITION",
-        message: "Solo se puede cancelar una compra en estado DRAFT o CONFIRMED.",
-      });
-    }
+      // ── If DRAFT, just cancel (no entries or stock) ──
+      if (purchase.status === "DRAFT") {
+        purchase.status = "CANCELLED";
+        purchase.cancelledAt = new Date();
+        await purchase.save({ session });
+        const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
+        return res.json(hydrated);
+      }
 
-    purchase.status = "CANCELLED";
-    purchase.cancelledAt = new Date();
-    await purchase.save();
+      // ── If CONFIRMED: reverse CHARGE entry ──
+      if (purchase.status === "CONFIRMED") {
+        purchase.status = "CANCELLED";
+        purchase.cancelledAt = new Date();
+        await purchase.save({ session });
 
-    const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
+        await SupplierAccountEntry.create([{
+          tenant: tenantId,
+          supplier: purchase.supplier,
+          date: new Date().toISOString().slice(0, 10),
+          type: "CREDIT_NOTE",
+          amount: purchase.total,
+          sign: -1,
+          purchase: purchase._id,
+          reference: `Cancelación compra ${purchase._id}`,
+          notes: "Reversión por cancelación de compra confirmada",
+          createdBy: req.user?._id,
+        }], { session });
 
-    return res.json(hydrated);
+        const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
+        return res.json(hydrated);
+      }
+
+      // ── If RECEIVED: revert stock + reverse CHARGE ──
+      if (purchase.status === "RECEIVED") {
+        // Revert stock for each item
+        for (const item of purchase.items) {
+          if (item.product) {
+            const product = await Product.findOne({ _id: item.product._id, tenant: tenantId }).session(session);
+            if (product) {
+              const qty = Number(item.quantity);
+              const eqQty = qty * (product.purchaseEquivalentQty || 1);
+              product.stock = (product.stock || 0) - eqQty;
+              await product.save({ session });
+
+              await StockMovement.create([{
+                tenant: tenantId,
+                product: product._id,
+                type: "SALIDA",
+                quantity: eqQty,
+                stockBefore: product.stock + eqQty,
+                stockAfter: product.stock,
+                reason: `Reversión por cancelación de compra ${purchase._id}`,
+                purchase: purchase._id,
+                source: "Sistema",
+              }], { session });
+            }
+          }
+        }
+
+        purchase.status = "CANCELLED";
+        purchase.cancelledAt = new Date();
+        await purchase.save({ session });
+
+        await SupplierAccountEntry.create([{
+          tenant: tenantId,
+          supplier: purchase.supplier,
+          date: new Date().toISOString().slice(0, 10),
+          type: "CREDIT_NOTE",
+          amount: purchase.total,
+          sign: -1,
+          purchase: purchase._id,
+          reference: `Cancelación compra ${purchase._id}`,
+          notes: "Reversión por cancelación de compra recibida",
+          createdBy: req.user?._id,
+        }], { session });
+
+        const hydrated = await mapPurchaseWithRelations(tenantId, purchase._id);
+        return res.json(hydrated);
+      }
+
+      throw new Error("INVALID_STATUS_TRANSITION");
+    });
   } catch (error) {
+    if (error.message === "PURCHASE_NOT_FOUND") {
+      return sendError(res, { status: 404, code: "PURCHASE_NOT_FOUND", message: "Compra no encontrada" });
+    }
+    if (error.message === "ALREADY_CANCELLED") {
+      return sendError(res, { status: 409, code: "ALREADY_CANCELLED", message: "La compra ya está cancelada" });
+    }
+    if (error.message === "INVALID_STATUS_TRANSITION") {
+      return sendError(res, { status: 409, code: "INVALID_STATUS_TRANSITION", message: "No se puede cancelar una compra pagada. Revierta el pago primero." });
+    }
     return handleServerError(res, error, "Error al cancelar compra");
+  } finally {
+    session.endSession();
   }
 };
 
