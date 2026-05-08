@@ -274,7 +274,7 @@ const updateCostCenterBody = z.object({
 
 const payPurchaseBody = z.object({
   amount: z.coerce.number().positive("Monto debe ser mayor a cero"),
-  paymentMethod: z.enum(["cash", "card", "mercadopago", "transfer", "naranja_x", "uala", "brubank", "santander", "supervielle", "frances", "bna", "prex", "cocos", "galicia", "check", "other"]),
+  paymentMethod: z.enum(["cash", "card", "mercadopago", "transfer", "naranja_x", "uala", "brubank", "santander", "supervielle", "frances", "bna", "prex", "cocos", "galicia", "lemon", "astropay", "modo", "check", "other"]),
   reference: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });
