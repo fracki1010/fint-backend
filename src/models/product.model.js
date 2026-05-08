@@ -59,6 +59,8 @@ const productSchema = new mongoose.Schema(
       retail: { type: Number, min: 0, default: null },
       wholesale: { type: Number, min: 0, default: null },
       distributor: { type: Number, min: 0, default: null },
+      premium: { type: Number, min: 0, default: null },
+      especial: { type: Number, min: 0, default: null },
     },
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },

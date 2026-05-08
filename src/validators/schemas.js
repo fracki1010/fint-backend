@@ -91,6 +91,8 @@ const priceTiersSchema = z.object({
   retail: z.coerce.number().min(0, "Precio minorista inválido").optional().nullable(),
   wholesale: z.coerce.number().min(0, "Precio mayorista inválido").optional().nullable(),
   distributor: z.coerce.number().min(0, "Precio distribuidor inválido").optional().nullable(),
+  premium: z.coerce.number().min(0, "Precio premium inválido").optional().nullable(),
+  especial: z.coerce.number().min(0, "Precio especial inválido").optional().nullable(),
 }).optional();
 
 const productPayloadBase = {
