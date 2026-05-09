@@ -10,7 +10,7 @@ const productionLogSchema = new mongoose.Schema(
     },
     recipe: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Recipe",
+      ref: "BillOfMaterial",
       required: true,
     },
     recipeName: { type: String, required: true },

@@ -44,4 +44,9 @@ const stockMovementSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+stockMovementSchema.index({ tenant: 1, createdAt: -1 });
+stockMovementSchema.index({ tenant: 1, product: 1, createdAt: -1 });
+stockMovementSchema.index({ tenant: 1, type: 1, createdAt: -1 });
+stockMovementSchema.index({ tenant: 1, product: 1, type: 1, createdAt: -1 });
+
 module.exports = mongoose.model("StockMovement", stockMovementSchema);

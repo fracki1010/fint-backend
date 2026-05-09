@@ -1,5 +1,14 @@
 const mongoose = require("mongoose");
 
+const snapshotItemSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
+  productName: { type: String, required: true },
+  sku: { type: String, default: "" },
+  stock: { type: Number, required: true },
+  costPrice: { type: Number, default: 0 },
+  stockValue: { type: Number, default: 0 },
+}, { _id: false });
+
 const inventorySnapshotSchema = new mongoose.Schema(
   {
     tenant: {
@@ -22,6 +31,12 @@ const inventorySnapshotSchema = new mongoose.Schema(
       type: Number,
       required: true,
       default: 0,
+    },
+    items: [snapshotItemSchema],
+    triggeredBy: {
+      type: String,
+      enum: ["manual", "auto_close"],
+      default: "manual",
     },
   },
   { timestamps: true },

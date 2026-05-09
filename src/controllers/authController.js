@@ -47,9 +47,9 @@ const toAuthResponse = async (user) => {
             } : undefined,
             enabledFeatures: (() => {
               const PLAN_FEATURES = {
-                essential: [],
-                business: ["financial_center", "recipes", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
-                enterprise: ["financial_center", "recipes", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
+                essential: ["client_account", "supplier_account", "quotes"],
+                business: ["financial_center", "recipes", "bill_of_materials", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
+                enterprise: ["financial_center", "recipes", "bill_of_materials", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
               };
               const base = PLAN_FEATURES[tenant.plan] || [];
               const extra = tenant.enabledFeatures || [];
@@ -179,8 +179,8 @@ exports.me = async (req, res) => {
             enabledFeatures: (() => {
               const PLAN_FEATURES = {
                 essential: [],
-                business: ["financial_center", "recipes", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
-                enterprise: ["financial_center", "recipes", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
+                business: ["financial_center", "recipes", "bill_of_materials", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
+                enterprise: ["financial_center", "recipes", "bill_of_materials", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
               };
               const base = PLAN_FEATURES[tenant.plan] || [];
               const extra = tenant.enabledFeatures || [];

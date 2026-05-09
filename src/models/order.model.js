@@ -40,6 +40,11 @@ const orderSchema = new mongoose.Schema(
       enum: ["Pendiente", "Parcial", "Pagado"],
       default: "Pendiente",
     },
+    paymentMethod: { type: String, default: "" },
+    paymentSplits: [{
+      method: { type: String },
+      amount: { type: Number },
+    }],
     deliveryStatus: {
       type: String,
       enum: ["Pendiente", "Preparando", "Entregada"],
@@ -72,5 +77,10 @@ const orderSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+orderSchema.index({ tenant: 1, createdAt: -1 });
+orderSchema.index({ tenant: 1, salesStatus: 1, createdAt: -1 });
+orderSchema.index({ tenant: 1, paymentStatus: 1, createdAt: -1 });
+orderSchema.index({ tenant: 1, client: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Order", orderSchema);

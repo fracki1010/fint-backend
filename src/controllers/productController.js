@@ -594,3 +594,142 @@ exports.deleteProduct = async (req, res) => {
     return handleServerError(res, error, "Error al desactivar el producto");
   }
 };
+
+// Importar productos desde array (procesado desde XLSX en frontend)
+exports.importProducts = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const { products: rawProducts } = req.body;
+
+    if (!Array.isArray(rawProducts) || rawProducts.length === 0) {
+      return sendError(res, { status: 400, code: "INVALID_INPUT", message: "Debe enviar un array de productos" });
+    }
+
+    if (rawProducts.length > 500) {
+      return sendError(res, { status: 400, code: "TOO_MANY_PRODUCTS", message: "Máximo 500 productos por importación" });
+    }
+
+    const results = { created: 0, updated: 0, skipped: 0, errors: [] };
+
+    for (let i = 0; i < rawProducts.length; i++) {
+      try {
+        const row = rawProducts[i];
+        if (!row.name || !row.name.toString().trim()) {
+          results.errors.push({ row: i + 1, message: "El nombre es obligatorio" });
+          continue;
+        }
+
+        const normalizedName = row.name.toString().trim();
+        const normalizedSku = row.sku?.trim() ? row.sku.trim().toUpperCase().replace(/\s+/g, "-") : null;
+
+        // Build product payload
+        const payload = {
+          tenant: tenantId,
+          name: normalizedName,
+          sku: normalizedSku || undefined,
+          barcode: row.codigo_barras?.toString().trim().toUpperCase(),
+          description: row.descripcion?.toString().trim(),
+          price: parseFloat(row.precio_base) || 0,
+          costPrice: parseFloat(row.precio_costo) || undefined,
+          stock: parseFloat(row.stock_actual) || 0,
+          minStock: parseFloat(row.stock_minimo) || 0,
+          category: row.categoria?.toString().trim(),
+          unitOfMeasure: row.unidad_medida?.toString().trim() || "unidad",
+          type: row.tipo === "materia_prima" ? "raw_material" : row.tipo === "terminado" ? "finished" : "both",
+          priceTiers: {
+            retail: parseFloat(row.precio_minorista) || null,
+            wholesale: parseFloat(row.precio_mayorista) || null,
+            distributor: parseFloat(row.precio_distribuidor) || null,
+          },
+          isActive: true,
+        };
+
+        // Build presentation if present
+        if (row.presentacion_nombre?.toString().trim()) {
+          const pres = {
+            name: row.presentacion_nombre.toString().trim(),
+            price: parseFloat(row.presentacion_precio) || 0,
+            equivalentQty: parseFloat(row.presentacion_unidades) || 1,
+            sku: row.presentacion_sku?.toString().trim().toUpperCase(),
+          };
+          payload.presentations = [pres];
+        }
+
+        // Clean undefined keys
+        Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+        // Look for existing product by SKU or name
+        const existing = await Product.findOne({
+          tenant: tenantId,
+          isActive: { $ne: false },
+          $or: [
+            ...(normalizedSku ? [{ sku: normalizedSku }] : []),
+            ...(!normalizedSku ? [{ name: normalizedName }] : []),
+          ],
+        });
+
+        if (existing) {
+          // Update existing product (merge fields)
+          const updateFields = {};
+          if (payload.price) updateFields.price = payload.price;
+          if (payload.costPrice) updateFields.costPrice = payload.costPrice;
+          if (payload.stock !== undefined) updateFields.stock = payload.stock;
+          if (payload.minStock) updateFields.minStock = payload.minStock;
+          if (payload.category) updateFields.category = payload.category;
+          if (payload.description) updateFields.description = payload.description;
+          if (payload.barcode) updateFields.barcode = payload.barcode;
+          if (payload.unitOfMeasure) updateFields.unitOfMeasure = payload.unitOfMeasure;
+          if (payload.type) updateFields.type = payload.type;
+          if (payload.priceTiers?.retail || payload.priceTiers?.wholesale || payload.priceTiers?.distributor) {
+            updateFields.priceTiers = {
+              ...(existing.priceTiers?.retail ? { retail: existing.priceTiers.retail } : {}),
+              ...(payload.priceTiers?.retail ? { retail: payload.priceTiers.retail } : {}),
+              ...(existing.priceTiers?.wholesale ? { wholesale: existing.priceTiers.wholesale } : {}),
+              ...(payload.priceTiers?.wholesale ? { wholesale: payload.priceTiers.wholesale } : {}),
+              ...(existing.priceTiers?.distributor ? { distributor: existing.priceTiers.distributor } : {}),
+              ...(payload.priceTiers?.distributor ? { distributor: payload.priceTiers.distributor } : {}),
+            };
+          }
+
+          // Add presentation to existing product if provided
+          if (payload.presentations?.length > 0) {
+            const pres = payload.presentations[0];
+            const existingPresIdx = existing.presentations.findIndex(
+              p => p.name?.toLowerCase() === pres.name?.toLowerCase()
+            );
+            if (existingPresIdx >= 0) {
+              // Update existing presentation
+              const updatePres = {};
+              if (pres.price) updatePres[`presentations.${existingPresIdx}.price`] = pres.price;
+              if (pres.equivalentQty) updatePres[`presentations.${existingPresIdx}.equivalentQty`] = pres.equivalentQty;
+              if (pres.sku) updatePres[`presentations.${existingPresIdx}.sku`] = pres.sku;
+              if (Object.keys(updatePres).length > 0) {
+                await Product.updateOne({ _id: existing._id }, { $set: updatePres });
+              }
+            } else {
+              // Add new presentation
+              await Product.updateOne(
+                { _id: existing._id },
+                { $push: { presentations: pres } }
+              );
+            }
+          }
+
+          await Product.updateOne({ _id: existing._id }, { $set: updateFields });
+          results.updated++;
+        } else {
+          // Create new product
+          const newProduct = new Product(payload);
+          await newProduct.save();
+          results.created++;
+        }
+      } catch (err) {
+        results.errors.push({ row: i + 1, message: err.message });
+      }
+    }
+
+    return res.json(results);
+  } catch (error) {
+    return handleServerError(res, error, "Error al importar productos");
+  }
+};

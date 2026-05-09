@@ -8,6 +8,7 @@ const { idParam } = require("../validators/schemas");
 // Validation schemas
 const openClosingBody = z.object({
   notes: z.string().optional(),
+  initialCash: z.number().optional(),
 });
 
 const closeClosingBody = z.object({

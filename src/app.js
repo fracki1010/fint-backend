@@ -4,6 +4,7 @@ const helmet = require("helmet");
 
 const authMiddleware = require("./middlewares/authMiddleware");
 const roleMiddleware = require("./middlewares/roleMiddleware");
+const planMiddleware = require("./middlewares/planMiddleware");
 const requestContextMiddleware = require("./middlewares/requestContextMiddleware");
 const requestLoggerMiddleware = require("./middlewares/requestLoggerMiddleware");
 const auditMiddleware = require("./middlewares/auditMiddleware");
@@ -36,12 +37,19 @@ function createApp(options = {}) {
 
   app.use("/api/auth", require("./routes/authRoutes"));
   app.use("/auth", require("./routes/authRoutes"));
-  app.use("/api/clients", authMiddleware, require("./routes/clientRoutes"));
-  app.use("/api/products", authMiddleware, require("./routes/productRoutes"));
-  app.use("/api/orders", authMiddleware, require("./routes/orderRoutes"));
+  app.use("/api/clients", authMiddleware, planMiddleware.requireFeature("client_account"), require("./routes/clientRoutes"));
+  app.use("/api/products", authMiddleware, (req, res, next) => {
+    if (req.method === "POST") return planMiddleware.checkLimit("maxProducts")(req, res, next);
+    next();
+  }, require("./routes/productRoutes"));
+  app.use("/api/orders", authMiddleware, (req, res, next) => {
+    if (req.method === "POST") return planMiddleware.checkLimit("maxOrdersPerMonth")(req, res, next);
+    next();
+  }, require("./routes/orderRoutes"));
   app.use("/api/vouchers", authMiddleware, require("./routes/voucher.routes"));
   app.use("/api/settings", authMiddleware, require("./routes/settingRoutes"));
   app.use("/api/tenant", authMiddleware, require("./routes/tenantRoutes"));
+  app.use("/api/inventory-snapshots", authMiddleware, require("./routes/inventorySnapshotRoutes"));
   app.use(
     "/api/stock-movements",
     authMiddleware,
@@ -56,14 +64,18 @@ function createApp(options = {}) {
   );
   app.use("/api/whatsapp", authMiddleware, roleMiddleware.requireRole("admin"), require("./routes/whatsappRoutes"));
   app.use("/api/supplies", authMiddleware, require("./routes/supplyRoutes"));
-  app.use("/api/purchases", authMiddleware, require("./routes/purchaseRoutes"));
-  app.use("/api/recipes", authMiddleware, require("./routes/recipeRoutes"));
+  app.use("/api/purchases", authMiddleware, planMiddleware.requireFeature("supplier_account"), require("./routes/purchaseRoutes"));
+  app.use("/api/bill-of-materials", authMiddleware, require("./routes/billOfMaterialRoutes"));
   app.use(
     "/api/suppliers",
     authMiddleware,
+    planMiddleware.requireFeature("supplier_account"),
     require("./routes/supplierAccountRoutes"),
   );
-  app.use("/api/team", authMiddleware, require("./routes/teamRoutes"));
+  app.use("/api/team", authMiddleware, planMiddleware.requireFeature("team_management"), (req, res, next) => {
+    if (req.method === "POST") return planMiddleware.checkLimit("maxUsers")(req, res, next);
+    next();
+  }, require("./routes/teamRoutes"));
   app.use("/api/notifications", require("./routes/notificationRoutes"));
   app.use("/api/audit-logs", authMiddleware, require("./routes/auditLogRoutes"));
   app.use(
@@ -80,8 +92,8 @@ function createApp(options = {}) {
   app.use("/api/payments", authMiddleware, require("./routes/paymentRoutes"));
   // Webhook de pagos no requiere auth (viene de MercadoPago)
   app.post("/api/payments/webhook", express.json(), require("./controllers/paymentController").webhook);
-  app.use("/api/cash-closing", authMiddleware, require("./routes/cashClosingRoutes"));
-  app.use("/api/quotes", authMiddleware, require("./routes/quoteRoutes"));
+  app.use("/api/cash-closing", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashClosingRoutes"));
+  app.use("/api/quotes", authMiddleware, planMiddleware.requireFeature("quotes"), require("./routes/quoteRoutes"));
   app.use("/api/banking", authMiddleware, require("./routes/bankingRoutes"));
   app.use(
     "/api/payment-orders",

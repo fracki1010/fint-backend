@@ -220,7 +220,7 @@ const recipeIngredientSchema = z.object({
   },
 );
 
-const createRecipeBody = z.object({
+const createBillOfMaterialBody = z.object({
   name: z.string().trim().min(1, "Nombre requerido"),
   productId: objectId.optional(),
   yieldQuantity: z.coerce.number().positive("Cantidad invalida").optional(),
@@ -228,7 +228,7 @@ const createRecipeBody = z.object({
   notes: z.string().trim().optional(),
 });
 
-const updateRecipeBody = z.object({
+const updateBillOfMaterialBody = z.object({
   name: z.string().trim().min(1).optional(),
   productId: objectId.optional(),
   yieldQuantity: z.coerce.number().positive("Cantidad invalida").optional(),
@@ -329,6 +329,11 @@ const updatePaymentOrderBody = z.object({
   notes: z.string().trim().optional(),
   items: z.array(paymentOrderItemBody).min(1).optional(),
   total: z.coerce.number().min(0).optional(),
+});
+
+const supplierAllocateBody = z.object({
+  amount: z.coerce.number().positive("Monto invalido"),
+  date: z.string().trim().optional(),
 });
 
 const supplierStatementQuery = z.object({
@@ -540,8 +545,8 @@ module.exports = {
   createQuoteBody,
   updateQuoteBody,
   recipeIngredientSchema,
-  createRecipeBody,
-  updateRecipeBody,
+  createBillOfMaterialBody,
+  updateBillOfMaterialBody,
   createSupplyBody,
   updateSupplyBody,
   supplyMovementBody,
@@ -551,6 +556,7 @@ module.exports = {
   updateCostCenterBody,
   supplierPaymentBody,
   supplierAccountEntryBody,
+  supplierAllocateBody,
   supplierStatementQuery,
   loginBody,
   bootstrapBody,

@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const Recipe = require("../models/recipe.model");
+const BillOfMaterial = require("../models/billOfMaterial.model");
 const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const ProductionLog = require("../models/productionLog.model");
@@ -9,13 +9,13 @@ const { Product } = require("../models/product.model");
 const { sendError, handleServerError } = require("../utils/http");
 const { notifyLowStock } = require("../utils/stockAlerts");
 
-const POPULATE_RECIPE = [
+const POPULATE_BOM = [
   { path: "product", select: "name sku" },
   { path: "ingredients.supply", select: "name unit currentStock referenceCost" },
   { path: "ingredients.product", select: "name unitOfMeasure stock costPrice minStock" },
 ];
 
-exports.getRecipes = async (req, res) => {
+exports.getBillOfMaterials = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
     const includeInactive = req.query.includeInactive === "true";
@@ -23,40 +23,40 @@ exports.getRecipes = async (req, res) => {
       ? { tenant: tenantId }
       : { tenant: tenantId, isActive: { $ne: false } };
 
-    const recipes = await Recipe.find(filter)
-      .populate(POPULATE_RECIPE)
+    const boms = await BillOfMaterial.find(filter)
+      .populate(POPULATE_BOM)
       .sort({ name: 1 });
 
-    return res.json(recipes);
+    return res.json(boms);
   } catch (error) {
-    return handleServerError(res, error, "Error al obtener recetas");
+    return handleServerError(res, error, "Error al obtener listas de materiales");
   }
 };
 
-exports.getRecipeById = async (req, res) => {
+exports.getBillOfMaterialById = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
-    const recipe = await Recipe.findOne({
+    const bom = await BillOfMaterial.findOne({
       _id: req.params.id,
       tenant: tenantId,
       isActive: { $ne: false },
-    }).populate(POPULATE_RECIPE);
+    }).populate(POPULATE_BOM);
 
-    if (!recipe) {
+    if (!bom) {
       return sendError(res, {
         status: 404,
-        code: "RECIPE_NOT_FOUND",
-        message: "Receta no encontrada",
+        code: "BOM_NOT_FOUND",
+        message: "Lista de materiales no encontrada",
       });
     }
 
-    return res.json(recipe);
+    return res.json(bom);
   } catch (error) {
-    return handleServerError(res, error, "Error al obtener receta");
+    return handleServerError(res, error, "Error al obtener lista de materiales");
   }
 };
 
-exports.createRecipe = async (req, res) => {
+exports.createBillOfMaterial = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
     const name = req.body.name?.toString().trim();
@@ -69,12 +69,12 @@ exports.createRecipe = async (req, res) => {
       });
     }
 
-    const duplicated = await Recipe.findOne({ tenant: tenantId, name });
+    const duplicated = await BillOfMaterial.findOne({ tenant: tenantId, name });
     if (duplicated) {
       return sendError(res, {
         status: 409,
-        code: "RECIPE_ALREADY_EXISTS",
-        message: "Ya existe una receta con ese nombre.",
+        code: "BOM_ALREADY_EXISTS",
+        message: "Ya existe una lista de materiales con ese nombre.",
       });
     }
 
@@ -84,7 +84,7 @@ exports.createRecipe = async (req, res) => {
       quantity: ing.quantity,
     }));
 
-    const created = await Recipe.create({
+    const created = await BillOfMaterial.create({
       tenant: tenantId,
       name,
       product: req.body.productId || null,
@@ -95,44 +95,44 @@ exports.createRecipe = async (req, res) => {
       deletedAt: null,
     });
 
-    await created.populate(POPULATE_RECIPE);
+    await created.populate(POPULATE_BOM);
 
     return res.status(201).json(created);
   } catch (error) {
-    return handleServerError(res, error, "Error al crear receta");
+    return handleServerError(res, error, "Error al crear lista de materiales");
   }
 };
 
-exports.updateRecipe = async (req, res) => {
+exports.updateBillOfMaterial = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
-    const recipe = await Recipe.findOne({
+    const bom = await BillOfMaterial.findOne({
       _id: req.params.id,
       tenant: tenantId,
       isActive: { $ne: false },
     });
 
-    if (!recipe) {
+    if (!bom) {
       return sendError(res, {
         status: 404,
-        code: "RECIPE_NOT_FOUND",
-        message: "Receta no encontrada",
+        code: "BOM_NOT_FOUND",
+        message: "Lista de materiales no encontrada",
       });
     }
 
-    const nextName = req.body.name?.toString().trim() || recipe.name;
+    const nextName = req.body.name?.toString().trim() || bom.name;
 
-    if (nextName !== recipe.name) {
-      const duplicated = await Recipe.findOne({
+    if (nextName !== bom.name) {
+      const duplicated = await BillOfMaterial.findOne({
         tenant: tenantId,
         name: nextName,
-        _id: { $ne: recipe._id },
+        _id: { $ne: bom._id },
       });
       if (duplicated) {
         return sendError(res, {
           status: 409,
-          code: "RECIPE_ALREADY_EXISTS",
-          message: "Ya existe otra receta con ese nombre.",
+          code: "BOM_ALREADY_EXISTS",
+          message: "Ya existe otra lista de materiales con ese nombre.",
         });
       }
     }
@@ -143,52 +143,52 @@ exports.updateRecipe = async (req, res) => {
           product: ing.productItemId || null,
           quantity: ing.quantity,
         }))
-      : recipe.ingredients;
+      : bom.ingredients;
 
-    Object.assign(recipe, {
+    Object.assign(bom, {
       name: nextName,
       product:
         req.body.productId !== undefined
           ? req.body.productId || null
-          : recipe.product,
-      yieldQuantity: req.body.yieldQuantity ?? recipe.yieldQuantity,
+          : bom.product,
+      yieldQuantity: req.body.yieldQuantity ?? bom.yieldQuantity,
       ingredients: updatedIngredients,
-      notes: req.body.notes ?? recipe.notes,
+      notes: req.body.notes ?? bom.notes,
     });
 
-    await recipe.save();
-    await recipe.populate(POPULATE_RECIPE);
+    await bom.save();
+    await bom.populate(POPULATE_BOM);
 
-    return res.json(recipe);
+    return res.json(bom);
   } catch (error) {
-    return handleServerError(res, error, "Error al actualizar receta");
+    return handleServerError(res, error, "Error al actualizar lista de materiales");
   }
 };
 
-exports.deleteRecipe = async (req, res) => {
+exports.deleteBillOfMaterial = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
-    const recipe = await Recipe.findOneAndUpdate(
+    const bom = await BillOfMaterial.findOneAndUpdate(
       { _id: req.params.id, tenant: tenantId, isActive: { $ne: false } },
       { isActive: false, deletedAt: new Date() },
       { new: true },
     );
 
-    if (!recipe) {
+    if (!bom) {
       return sendError(res, {
         status: 404,
-        code: "RECIPE_NOT_FOUND",
-        message: "Receta no encontrada",
+        code: "BOM_NOT_FOUND",
+        message: "Lista de materiales no encontrada",
       });
     }
 
-    return res.json({ message: "Receta eliminada", recipe });
+    return res.json({ message: "Lista de materiales eliminada", bom });
   } catch (error) {
-    return handleServerError(res, error, "Error al eliminar receta");
+    return handleServerError(res, error, "Error al eliminar lista de materiales");
   }
 };
 
-exports.produceRecipe = async (req, res) => {
+exports.produceBillOfMaterial = async (req, res) => {
   const session = await mongoose.startSession();
   let result = null;
   let businessError = null;
@@ -200,7 +200,7 @@ exports.produceRecipe = async (req, res) => {
       const batches = Math.max(1, Number(req.body.quantity) || 1);
       const notes = req.body.notes?.toString().trim() || "";
 
-      const recipe = await Recipe.findOne({
+      const bom = await BillOfMaterial.findOne({
         _id: req.params.id,
         tenant: tenantId,
         isActive: { $ne: false },
@@ -209,18 +209,18 @@ exports.produceRecipe = async (req, res) => {
         .populate("ingredients.product")
         .session(session);
 
-      if (!recipe) {
+      if (!bom) {
         businessError = {
           status: 404,
-          code: "RECIPE_NOT_FOUND",
-          message: "Receta no encontrada",
+          code: "BOM_NOT_FOUND",
+          message: "Lista de materiales no encontrada",
         };
-        throw new Error("RECIPE_NOT_FOUND");
+        throw new Error("BOM_NOT_FOUND");
       }
 
       // Check stock availability for all ingredients
       const shortages = [];
-      for (const ing of recipe.ingredients) {
+      for (const ing of bom.ingredients) {
         const needed = ing.quantity * batches;
 
         if (ing.product) {
@@ -258,7 +258,7 @@ exports.produceRecipe = async (req, res) => {
       }
 
       // Deduct stock and create movements
-      for (const ing of recipe.ingredients) {
+      for (const ing of bom.ingredients) {
         const needed = ing.quantity * batches;
 
         if (ing.product) {
@@ -297,7 +297,7 @@ exports.produceRecipe = async (req, res) => {
                 quantity: needed,
                 stockBefore,
                 stockAfter,
-                reason: `Producción: ${recipe.name}${notes ? ` — ${notes}` : ""}`,
+                reason: `Producción: ${bom.name}${notes ? ` — ${notes}` : ""}`,
                 source: "Sistema",
               },
             ],
@@ -332,9 +332,9 @@ exports.produceRecipe = async (req, res) => {
                 quantity: needed,
                 stockBefore,
                 stockAfter,
-                reason: `Producción: ${recipe.name}${notes ? ` — ${notes}` : ""}`,
+                reason: `Producción: ${bom.name}${notes ? ` — ${notes}` : ""}`,
                 sourceType: "PRODUCTION",
-                sourceId: recipe._id.toString(),
+                sourceId: bom._id.toString(),
                 createdBy: req.user?._id || null,
               },
             ],
@@ -344,34 +344,34 @@ exports.produceRecipe = async (req, res) => {
       }
 
       // If linked to a product, increase its stock and update costPrice
-      if (recipe.product) {
-        const unitsProduced = recipe.yieldQuantity * batches;
-        const totalIngredientCost = recipe.ingredients.reduce((sum, ing) => {
+      if (bom.product) {
+        const unitsProduced = bom.yieldQuantity * batches;
+        const totalIngredientCost = bom.ingredients.reduce((sum, ing) => {
           const cost = ing.product
             ? (ing.product.costPrice ?? 0)
             : (ing.supply?.referenceCost ?? 0);
           return sum + ing.quantity * cost;
         }, 0);
-        const costPerUnit = recipe.yieldQuantity > 0 ? totalIngredientCost / recipe.yieldQuantity : 0;
+        const costPerUnit = bom.yieldQuantity > 0 ? totalIngredientCost / bom.yieldQuantity : 0;
 
         const updatePayload = { $inc: { stock: unitsProduced } };
         if (costPerUnit > 0) updatePayload.$set = { costPrice: costPerUnit };
 
         await Product.findOneAndUpdate(
-          { _id: recipe.product, tenant: tenantId },
+          { _id: bom.product, tenant: tenantId },
           updatePayload,
           { session },
         );
       }
 
-      const unitsProduced = recipe.yieldQuantity * batches;
+      const unitsProduced = bom.yieldQuantity * batches;
 
       await ProductionLog.create(
         [
           {
             tenant: tenantId,
-            recipe: recipe._id,
-            recipeName: recipe.name,
+            recipe: bom._id,
+            recipeName: bom.name,
             batchesProduced: batches,
             unitsProduced,
             notes,
@@ -382,10 +382,10 @@ exports.produceRecipe = async (req, res) => {
       );
 
       result = {
-        recipe: { _id: recipe._id, name: recipe.name },
+        billOfMaterial: { _id: bom._id, name: bom.name },
         batchesProduced: batches,
         unitsProduced,
-        ingredientsUsed: recipe.ingredients.length,
+        ingredientsUsed: bom.ingredients.length,
       };
     });
   } catch (error) {
@@ -410,10 +410,10 @@ exports.getProductionLogs = async (req, res) => {
     const tenantId = req.user?.tenant;
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const page = Math.max(1, Number(req.query.page) || 1);
-    const recipeId = req.query.recipeId;
+    const billOfMaterialId = req.query.billOfMaterialId;
 
     const filter = { tenant: tenantId };
-    if (recipeId) filter.recipe = recipeId;
+    if (billOfMaterialId) filter.recipe = billOfMaterialId;
 
     const logs = await ProductionLog.find(filter)
       .sort({ createdAt: -1 })
@@ -426,7 +426,7 @@ exports.getProductionLogs = async (req, res) => {
   }
 };
 
-exports.getRecipeProductionLogs = async (req, res) => {
+exports.getBillOfMaterialProductionLogs = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
     const logs = await ProductionLog.find({
@@ -438,6 +438,6 @@ exports.getRecipeProductionLogs = async (req, res) => {
 
     return res.json(logs);
   } catch (error) {
-    return handleServerError(res, error, "Error al obtener historial de la receta");
+    return handleServerError(res, error, "Error al obtener historial de la lista de materiales");
   }
 };

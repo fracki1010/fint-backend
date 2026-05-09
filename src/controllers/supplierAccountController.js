@@ -1,5 +1,6 @@
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
 const Purchase = require("../models/purchase.model");
+const supplierAccountService = require("../services/supplierAccountService");
 const { sendError, handleServerError } = require("../utils/http");
 
 const signByType = (type) => {
@@ -154,5 +155,21 @@ exports.getSupplierStatement = async (req, res) => {
     return res.json({ entries, balance });
   } catch (error) {
     return handleServerError(res, error, "Error al obtener estado de cuenta");
+  }
+};
+
+exports.allocatePayment = async (req, res) => {
+  try {
+    const { amount, date } = req.body;
+
+    const result = await supplierAccountService.allocatePayment({
+      supplier: req.params.id,
+      amount,
+      date: date ? new Date(date) : undefined,
+    });
+
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, error, "Error al asignar pago");
   }
 };

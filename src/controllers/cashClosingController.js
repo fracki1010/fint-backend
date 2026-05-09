@@ -7,7 +7,7 @@ const { sendError, handleServerError } = require("../utils/http");
  */
 exports.openClosing = async (req, res) => {
   try {
-    const { notes } = req.body;
+    const { notes, initialCash } = req.body;
     const tenantId = req.user?.tenant;
     const userId = req.user?._id;
 
@@ -21,6 +21,7 @@ exports.openClosing = async (req, res) => {
 
     const closing = await cashClosingService.createClosing(tenantId, userId, {
       notes,
+      initialCash,
     });
 
     return res.status(201).json({

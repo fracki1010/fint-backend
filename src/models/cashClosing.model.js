@@ -138,6 +138,12 @@ const cashClosingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+    // Starting cash when closing was opened
+    initialCash: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true },
 );

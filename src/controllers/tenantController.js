@@ -19,6 +19,7 @@ const PLAN_CONFIGS = {
     features: [
       "financial_center",
       "recipes",
+      "bill_of_materials",
       "supplier_account",
       "client_account",
       "team_management",
@@ -36,6 +37,7 @@ const PLAN_CONFIGS = {
     features: [
       "financial_center",
       "recipes",
+      "bill_of_materials",
       "advanced_reports",
       "api_access",
       "supplier_account",

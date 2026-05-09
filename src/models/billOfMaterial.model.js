@@ -17,7 +17,7 @@ const ingredientSchema = new mongoose.Schema(
   { _id: false },
 );
 
-const recipeSchema = new mongoose.Schema(
+const billOfMaterialSchema = new mongoose.Schema(
   {
     tenant: {
       type: mongoose.Schema.Types.ObjectId,
@@ -40,6 +40,6 @@ const recipeSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-recipeSchema.index({ tenant: 1, name: 1 }, { unique: true });
+billOfMaterialSchema.index({ tenant: 1, name: 1 }, { unique: true });
 
-module.exports = mongoose.model("Recipe", recipeSchema);
+module.exports = mongoose.model("BillOfMaterial", billOfMaterialSchema);

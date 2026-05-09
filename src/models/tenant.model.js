@@ -26,9 +26,9 @@ const tenantSchema = new mongoose.Schema(
     
     // Usage Limits (based on plan)
     limits: {
-      maxUsers: { type: Number, default: 3 },
-      maxProducts: { type: Number, default: 200 },
-      maxOrdersPerMonth: { type: Number, default: 500 },
+      maxUsers: { type: Number, default: 5 },
+      maxProducts: { type: Number, default: 500 },
+      maxOrdersPerMonth: { type: Number, default: 1000 },
     },
     
     // Billing Information
@@ -57,6 +57,7 @@ const tenantSchema = new mongoose.Schema(
         "whatsapp",
         "financial_center",
         "recipes",
+        "bill_of_materials",
         "api_access",
         "advanced_reports",
         "multi_location",

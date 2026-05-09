@@ -4,6 +4,7 @@ const Order = require("../models/order.model");
 const ClientAccountEntry = require("../models/clientAccountEntry.model");
 const { HttpError } = require("../utils/http");
 const { logError } = require("../utils/logger");
+const inventorySnapshotService = require("./inventorySnapshotService");
 
 // Default prefix for closing numbers
 const CLOSING_PREFIX = "CJ-";
@@ -60,6 +61,7 @@ const createClosing = async (tenantId, userId, options = {}) => {
     status: "open",
     openedAt: options.openedAt || new Date(),
     notes: options.notes || null,
+    initialCash: options.initialCash || 0,
   });
 
   return closing;
@@ -211,9 +213,9 @@ const closeClosing = async (closingId, actualAmounts, userId, options = {}) => {
 
   const actualTotal = actualCash + actualCard + actualTransfer + actualCheck + actualOther;
 
-  // Calculate discrepancies
-  const discrepancyCash = actualCash - expected.cash;
-  const discrepancyTotal = actualTotal - expected.total;
+  // Calculate discrepancies (initialCash is starting cash, subtract it from actual)
+  const discrepancyCash = actualCash - expected.cash - (closing.initialCash || 0);
+  const discrepancyTotal = (actualTotal - (closing.initialCash || 0)) - expected.total;
 
   // Update closing
   closing.status = "closed";
@@ -254,6 +256,20 @@ const closeClosing = async (closingId, actualAmounts, userId, options = {}) => {
     },
     { cashClosing: closingId }
   );
+
+  // Auto-trigger inventory snapshot on close (non-critical)
+  try {
+    await inventorySnapshotService.triggerSnapshot({
+      tenantId: closing.tenant,
+      triggeredBy: "auto_close",
+    });
+  } catch (err) {
+    logError("inventory_snapshot_auto_trigger_failed", {
+      message: err.message,
+      closingId: closing._id,
+      tenant: closing.tenant,
+    });
+  }
 
   return closing;
 };

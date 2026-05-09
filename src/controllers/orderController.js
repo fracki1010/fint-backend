@@ -11,6 +11,7 @@ const {
   createAndDispatchNotification,
 } = require("../services/notificationService");
 const voucherService = require("../services/voucherService");
+const cashClosingService = require("../services/cashClosingService");
 const { HttpError, sendError, handleServerError } = require("../utils/http");
 
 // Valid price tier values
@@ -540,6 +541,7 @@ exports.createOrder = async (req, res) => {
       paymentStatus,
       deliveryStatus,
       paymentMethod,
+      paymentSplits,
       costCenter,
     } = req.body;
     const orderSettings = await getOrderSettings(tenantId);
@@ -570,6 +572,8 @@ exports.createOrder = async (req, res) => {
       imageUrl,
       source: source || "Dashboard",
       notes,
+      paymentMethod: paymentMethod || "",
+      paymentSplits: paymentSplits || [],
       costCenter: costCenter || null,
       ...buildStatePatch(
         {
@@ -651,6 +655,16 @@ exports.createOrder = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
     sessionClosed = true;
+
+    // Non-critical: link order to open cash closing if one exists
+    try {
+      const openClosing = await cashClosingService.getOpenClosing(tenantId);
+      if (openClosing) {
+        await Order.updateOne({ _id: newOrder._id }, { cashClosing: openClosing._id });
+      }
+    } catch (err) {
+      console.error("Error al vincular orden con cierre de caja:", err.message);
+    }
 
     // Fire payload + vouchers + notification in parallel (outside transaction)
     const [payload] = await Promise.all([
@@ -775,6 +789,10 @@ exports.updateOrder = async (req, res) => {
     const previousPaymentStatus = order.paymentStatus || "Pendiente";
 
     Object.assign(order, buildStatePatch(req.body, order));
+
+    // Apply payment fields from the request body
+    if (req.body.paymentMethod !== undefined) order.paymentMethod = req.body.paymentMethod;
+    if (req.body.paymentSplits !== undefined) order.paymentSplits = req.body.paymentSplits;
 
     if (
       order.deliveryStatus === "Entregada" &&

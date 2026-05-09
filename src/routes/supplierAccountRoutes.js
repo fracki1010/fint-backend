@@ -8,6 +8,7 @@ const {
   supplierStatementQuery,
   supplierPaymentBody,
   supplierAccountEntryBody,
+  supplierAllocateBody,
 } = require("../validators/schemas");
 
 const router = express.Router();
@@ -39,6 +40,11 @@ router.get(
   "/:id/account/statement",
   validateRequest({ params: idParam, query: supplierStatementQuery }),
   supplierAccountController.getSupplierStatement,
+);
+router.post(
+  "/:id/account/allocate",
+  validateRequest({ params: idParam, body: supplierAllocateBody }),
+  supplierAccountController.allocatePayment,
 );
 
 module.exports = router;

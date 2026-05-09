@@ -22,6 +22,13 @@ const presentationSchema = new mongoose.Schema(
     price: { type: Number, min: 0 },
     equivalentQty: { type: Number, default: 1, min: 0.001 },
     isActive: { type: Boolean, default: true },
+    priceTiers: {
+      retail: { type: Number, min: 0, default: null },
+      wholesale: { type: Number, min: 0, default: null },
+      distributor: { type: Number, min: 0, default: null },
+      premium: { type: Number, min: 0, default: null },
+      especial: { type: Number, min: 0, default: null },
+    },
   },
   { _id: true, timestamps: false },
 );

@@ -34,10 +34,26 @@ const supplierAccountEntrySchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    // ── Reconciliation fields ──────────────────────────────────────────
+    dueDate: { type: Date, default: null },
+    remainingAmount: { type: Number, default: null },
+    status: {
+      type: String,
+      enum: ["pending", "partial", "paid", "cancelled"],
+      default: null,
+    },
+    allocations: [{
+      entryId: { type: mongoose.Schema.Types.ObjectId, ref: "SupplierAccountEntry", required: true },
+      amount: { type: Number, required: true },
+      date: { type: Date, default: Date.now },
+    }],
   },
   { timestamps: true },
 );
 
 supplierAccountEntrySchema.index({ tenant: 1, supplier: 1, date: 1, createdAt: 1 });
+supplierAccountEntrySchema.index({ tenant: 1, supplier: 1, status: 1 });
+supplierAccountEntrySchema.index({ tenant: 1, supplier: 1, dueDate: 1 });
+supplierAccountEntrySchema.index({ tenant: 1, supplier: 1, type: 1, status: 1, date: 1, createdAt: 1 });
 
 module.exports = mongoose.model("SupplierAccountEntry", supplierAccountEntrySchema);
