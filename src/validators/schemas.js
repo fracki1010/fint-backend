@@ -300,6 +300,37 @@ const supplierAccountEntryBody = z.object({
   notes: z.string().trim().optional(),
 });
 
+const paymentOrderItemBody = z.object({
+  purchaseId: objectId,
+  amount: z.coerce.number().positive("Monto debe ser mayor a cero"),
+});
+
+const PAYMENT_METHOD_ENUM = z.enum([
+  "cash", "card", "mercadopago", "transfer", "naranja_x", "uala",
+  "brubank", "santander", "supervielle", "frances", "bna", "prex",
+  "cocos", "galicia", "lemon", "astropay", "modo", "check", "other",
+]);
+
+const createPaymentOrderBody = z.object({
+  supplierId: objectId,
+  date: z.string().trim().min(1, "Fecha requerida"),
+  paymentMethod: PAYMENT_METHOD_ENUM.optional().default("transfer"),
+  reference: z.string().trim().optional().default(""),
+  notes: z.string().trim().optional().default(""),
+  items: z.array(paymentOrderItemBody).min(1, "Debes incluir al menos un item"),
+  total: z.coerce.number().min(0, "Total inválido"),
+});
+
+const updatePaymentOrderBody = z.object({
+  supplierId: objectId.optional(),
+  date: z.string().trim().optional(),
+  paymentMethod: PAYMENT_METHOD_ENUM.optional(),
+  reference: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+  items: z.array(paymentOrderItemBody).min(1).optional(),
+  total: z.coerce.number().min(0).optional(),
+});
+
 const supplierStatementQuery = z.object({
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
@@ -496,7 +527,15 @@ const reconciliationQuery = z.object({
   dateTo: z.string().trim().min(1, "Fecha hasta requerida"),
 });
 
+const ivaReportQuery = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
 module.exports = {
+  ivaReportQuery,
+  createPaymentOrderBody,
+  updatePaymentOrderBody,
   quoteItemBody,
   createQuoteBody,
   updateQuoteBody,

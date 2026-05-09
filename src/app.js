@@ -83,12 +83,23 @@ function createApp(options = {}) {
   app.use("/api/cash-closing", authMiddleware, require("./routes/cashClosingRoutes"));
   app.use("/api/quotes", authMiddleware, require("./routes/quoteRoutes"));
   app.use("/api/banking", authMiddleware, require("./routes/bankingRoutes"));
+  app.use(
+    "/api/payment-orders",
+    authMiddleware,
+    require("./routes/paymentOrderRoutes"),
+  );
   app.use("/api/cost-centers", authMiddleware, require("./routes/costCenterRoutes"));
   app.use(
     "/api/treasury",
     authMiddleware,
     roleMiddleware.requireRole("admin", "contabilidad"),
     require("./routes/treasuryRoutes"),
+  );
+  app.use(
+    "/api/reports",
+    authMiddleware,
+    roleMiddleware.requireRole("admin", "contabilidad"),
+    require("./routes/reportRoutes"),
   );
 
   app.get("/api/health", (_req, res) => {
