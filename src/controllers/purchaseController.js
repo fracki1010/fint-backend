@@ -4,8 +4,9 @@ const Purchase = require("../models/purchase.model");
 const { Supply } = require("../models/supply.model");
 const SupplyMovement = require("../models/supplyMovement.model");
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
-const { recalculateAVCO } = require("../services/costingService");
+const { recalculateAVCO, receiveStock } = require("../services/costingService");
 const { Product } = require("../models/product.model");
+const Receipt = require("../models/receipt.model");
 const StockMovement = require("../models/stockMovement.model");
 const { sendError, handleServerError } = require("../utils/http");
 
@@ -212,6 +213,25 @@ exports.getPurchaseById = async (req, res) => {
   }
 };
 
+// ── Helpers ────────────────────────────────────────────────────
+
+function getCreditDays(paymentCondition) {
+  if (paymentCondition === "CASH") return 0;
+  const match = paymentCondition.match(/^CREDIT_(\d+)$/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function calculateDueDate(paymentCondition, dateStr) {
+  const days = getCreditDays(paymentCondition);
+  if (days <= 0) return "";
+  const baseDate = dateStr ? new Date(dateStr) : new Date();
+  const due = new Date(baseDate);
+  due.setDate(due.getDate() + days);
+  return due.toISOString().split("T")[0];
+}
+
+// ── CRUD ───────────────────────────────────────────────────────
+
 exports.createPurchase = async (req, res) => {
   try {
     const tenantId = req.user?.tenant;
@@ -225,7 +245,7 @@ exports.createPurchase = async (req, res) => {
       subtotal: req.body.subtotal,
       tax: req.body.tax,
       total: req.body.total,
-      dueDate: req.body.dueDate || "",
+      dueDate: calculateDueDate(req.body.paymentCondition, req.body.date) || req.body.dueDate || "",
       costCenter: req.body.costCenter || null,
       notes: req.body.notes || "",
       items: req.body.items.map((item) => {
@@ -304,66 +324,29 @@ exports.receivePurchase = async (req, res) => {
       if (!purchase) throw new Error("PURCHASE_NOT_FOUND");
       if (purchase.status !== "CONFIRMED") throw new Error("INVALID_STATUS_TRANSITION");
 
+      const receiptItems = [];
+
       for (const item of purchase.items) {
         if (item.product) {
-          // ── Product flow ──
-          const product = await Product.findOne({
-            _id: item.product._id,
-            tenant: tenantId,
-            isActive: { $ne: false },
-          }).session(session);
+          // ── Product flow — use shared receiveStock ──
+          const result = await receiveStock({
+            tenantId,
+            productId: item.product._id,
+            quantity: Number(item.quantity),
+            unitCost: Number(item.unitCost),
+            presentationId: item.presentationId,
+            purchaseId: purchase._id,
+            reason: `Recepción de compra ${purchase._id}`,
+            session,
+          });
 
-          if (!product) throw new Error("PRODUCT_NOT_FOUND");
-          if (product.type === "finished") throw new Error("PRODUCT_TYPE_NOT_PURCHASABLE");
-
-          const receivedQty = Number(item.quantity);
-          // If presentationId is set, use presentation.equivalentQty; otherwise use product.purchaseEquivalentQty
-          let equivalentQty = product.purchaseEquivalentQty || 1;
-          let presentationName;
-          let presentationEquivalentQty;
-          let presentationUnitCost;
-          if (item.presentationId) {
-            const presentation = product.presentations.id(item.presentationId);
-            if (presentation) {
-              equivalentQty = presentation.equivalentQty || 1;
-              presentationName = presentation.name;
-              presentationEquivalentQty = presentation.equivalentQty || 1;
-              presentationUnitCost = Number(item.unitCost);
-            }
-          }
-          const stockQty = receivedQty * equivalentQty;
-          const unitCost = equivalentQty !== 1
-            ? Number(item.unitCost) / equivalentQty
-            : Number(item.unitCost);
-
-          const stockBefore = product.stock;
-          const result = recalculateAVCO(product, stockQty, unitCost);
-
-          product.stock = result.stock;
-          product.costPrice = result.costPrice;
-          product.costLocked = true;
-          await product.save({ session });
-
-          await StockMovement.create(
-            [
-              {
-                tenant: tenantId,
-                product: product._id,
-                type: "ENTRADA",
-                quantity: stockQty,
-                stockBefore,
-                stockAfter: product.stock,
-                reason: `Recepcion de compra ${purchase._id}`,
-                purchase: purchase._id,
-                source: "Sistema",
-                presentationName,
-                presentationId: item.presentationId || undefined,
-                presentationEquivalentQty,
-                presentationUnitCost,
-              },
-            ],
-            { session },
-          );
+          receiptItems.push({
+            product: item.product._id,
+            presentationId: item.presentationId || undefined,
+            quantity: Number(item.quantity),
+            unitCost: Number(item.unitCost),
+            lineTotal: Math.round(Number(item.quantity) * Number(item.unitCost) * 100) / 100,
+          });
         } else if (item.supply) {
           // ── Supply flow (legacy) — try Product first since supplies are now Products ──
           const supplyId = item.supply._id;
@@ -377,37 +360,22 @@ exports.receivePurchase = async (req, res) => {
 
           if (product) {
             // Treat as Product (unified supply)
-            const receivedQty = Number(item.quantity);
-            const equivalentQty = product.purchaseEquivalentQty || 1;
-            const stockQty = receivedQty * equivalentQty;
-            const unitCost = equivalentQty !== 1
-              ? Number(item.unitCost) / equivalentQty
-              : Number(item.unitCost);
+            const result = await receiveStock({
+              tenantId,
+              productId: product._id,
+              quantity: Number(item.quantity),
+              unitCost: Number(item.unitCost),
+              purchaseId: purchase._id,
+              reason: `Recepción de compra ${purchase._id}`,
+              session,
+            });
 
-            const stockBefore = product.stock;
-            const result = recalculateAVCO(product, stockQty, unitCost);
-
-            product.stock = result.stock;
-            product.costPrice = result.costPrice;
-            product.costLocked = true;
-            await product.save({ session });
-
-            await StockMovement.create(
-              [
-                {
-                  tenant: tenantId,
-                  product: product._id,
-                  type: "ENTRADA",
-                  quantity: stockQty,
-                  stockBefore,
-                  stockAfter: product.stock,
-                  reason: `Recepcion de compra ${purchase._id}`,
-                  purchase: purchase._id,
-                  source: "Sistema",
-                },
-              ],
-              { session },
-            );
+            receiptItems.push({
+              product: product._id,
+              quantity: Number(item.quantity),
+              unitCost: Number(item.unitCost),
+              lineTotal: Math.round(Number(item.quantity) * Number(item.unitCost) * 100) / 100,
+            });
           } else {
             // Legacy Supply document
             const supply = await Supply.findOne({
@@ -425,24 +393,38 @@ exports.receivePurchase = async (req, res) => {
             await supply.save({ session });
 
             await SupplyMovement.create(
-              [
-                {
-                  tenant: tenantId,
-                  supply: supply._id,
-                  type: "IN",
-                  quantity: Number(item.quantity),
-                  stockBefore,
-                  stockAfter,
-                  reason: `Recepcion de compra ${purchase._id}`,
-                  sourceType: "PURCHASE",
-                  sourceId: String(purchase._id),
-                  createdBy: req.user?._id,
-                },
-              ],
+              [{
+                tenant: tenantId,
+                supply: supply._id,
+                type: "IN",
+                quantity: Number(item.quantity),
+                stockBefore,
+                stockAfter,
+                reason: `Recepción de compra ${purchase._id}`,
+                sourceType: "PURCHASE",
+                sourceId: String(purchase._id),
+                createdBy: req.user?._id,
+              }],
               { session },
             );
           }
         }
+      }
+
+      // Create Receipt for this reception
+      if (receiptItems.length > 0) {
+        const receipt = await Receipt.create(
+          [{
+            tenant: tenantId,
+            purchase: purchase._id,
+            date: new Date().toISOString().split("T")[0],
+            notes: "Recepción completa (legacy)",
+            items: receiptItems,
+            createdBy: req.user?._id,
+          }],
+          { session },
+        );
+        purchase.receiptIds.push(receipt[0]._id);
       }
 
       purchase.status = "RECEIVED";
@@ -460,18 +442,12 @@ exports.receivePurchase = async (req, res) => {
         message: "Compra no encontrada",
       });
     }
+
     if (error.message === "INVALID_STATUS_TRANSITION") {
       return sendError(res, {
         status: 409,
-        code: "INVALID_STATUS_TRANSITION",
-        message: "Solo se puede recibir una compra en estado CONFIRMED.",
-      });
-    }
-    if (error.message === "SUPPLY_NOT_FOUND") {
-      return sendError(res, {
-        status: 404,
-        code: "SUPPLY_NOT_FOUND",
-        message: "Insumo no encontrado en items de compra.",
+        code: "INVALID_STATUS",
+        message: "Solo se pueden recibir compras confirmadas.",
       });
     }
 
@@ -479,21 +455,13 @@ exports.receivePurchase = async (req, res) => {
       return sendError(res, {
         status: 404,
         code: "PRODUCT_NOT_FOUND",
-        message: "Producto no encontrado en items de compra.",
+        message: "Producto no encontrado durante la recepción.",
       });
     }
 
-    if (error.message === "PRODUCT_TYPE_NOT_PURCHASABLE") {
-      return sendError(res, {
-        status: 400,
-        code: "PRODUCT_TYPE_NOT_PURCHASABLE",
-        message: "El producto es de tipo 'finished' y no está habilitado para compras. Usá un insumo (Supply) o cambiá el tipo del producto a 'raw_material' o 'both'.",
-      });
-    }
-
-    return handleServerError(res, error, "Error al recibir compra");
+    return handleServerError(res, error, "Error al recibir la compra");
   } finally {
-    await session.endSession();
+    session.endSession();
   }
 };
 
@@ -680,6 +648,8 @@ exports.downloadPurchasePdf = async (req, res) => {
     const tenantId = req.user?.tenant;
     const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
       .populate("supplier")
+      .populate("items.product", "name sku")
+      .populate("items.supply", "name sku")
       .lean();
 
     if (!purchase) {

@@ -44,8 +44,9 @@ const normalizePresentations = (presentations) => {
       unitOfMeasure: UNIT_OPTIONS.includes(p.unitOfMeasure)
         ? p.unitOfMeasure
         : "unidad",
-      price: p.price,
-      equivalentQty: p.equivalentQty,
+    price: p.price,
+    cost: p.cost,
+    equivalentQty: p.equivalentQty,
       isActive: p.isActive !== false,
     }))
     .filter((p) => p.name);
@@ -195,6 +196,7 @@ const buildProductPayload = async (tenantId, payload, currentProductId = null) =
     purchaseEquivalentQty: payload.purchaseEquivalentQty ?? undefined,
     costLocked: payload.costLocked ?? undefined,
     presentations: normalizePresentations(payload.presentations),
+    defaultPresentationId: payload.defaultPresentationId || null,
     priceTiers: normalizePriceTiers(payload.priceTiers),
     isActive: true,
     deletedAt: null,

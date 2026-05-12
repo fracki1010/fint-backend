@@ -83,6 +83,7 @@ const presentationSchema = z.object({
   name: z.string().trim().min(1, "Nombre requerido"),
   unitOfMeasure: UNIT_OPTIONS_ENUM,
   price: z.coerce.number().min(0, "Precio inválido"),
+  cost: z.coerce.number().min(0, "Costo inválido").optional(),
   equivalentQty: z.coerce.number().positive("Cantidad equivalente inválida"),
   isActive: z.boolean().optional(),
 });
@@ -116,6 +117,7 @@ const productPayloadBase = {
     .positive("Cantidad equivalente debe ser positiva")
     .optional(),
   presentations: z.array(presentationSchema).optional(),
+  defaultPresentationId: z.string().trim().optional().nullable(),
   priceTiers: priceTiersSchema,
 };
 
@@ -133,6 +135,22 @@ const orderItemSchema = z.object({
   price: z.coerce.number().min(0, "Precio inválido"),
   productId: objectId.optional(),
   presentationId: objectId.optional(),
+});
+
+const receiptItemSchema = z.object({
+  product: z.string().trim().min(1, "Producto requerido"),
+  presentationId: objectId.optional(),
+  quantity: z.coerce.number().positive("Cantidad real debe ser positiva"),
+  remittedQty: z.coerce.number().positive("Cantidad remitida inválida").optional(),
+  differenceReason: z.enum(["", "falta", "sobra", "dañado", "sustitución", "otro"]).optional(),
+  notes: z.string().trim().optional(),
+  unitCost: z.coerce.number().min(0, "Costo unitario inválido"),
+});
+
+const createReceiptBody = z.object({
+  date: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+  items: z.array(receiptItemSchema).min(1, "Debe incluir al menos un item"),
 });
 
 const createOrderBody = z.object({
@@ -253,7 +271,7 @@ const purchaseItemBody = z.object({
 const createPurchaseBody = z.object({
   supplierId: objectId,
   date: z.string().trim().min(1, "Fecha requerida"),
-  paymentCondition: z.enum(["CASH", "CREDIT"]),
+  paymentCondition: z.enum(["CASH", "CREDIT", "CREDIT_15", "CREDIT_30", "CREDIT_45", "CREDIT_60", "CREDIT_90"]),
   dueDate: z.string().trim().optional(),
   subtotal: z.coerce.number().min(0),
   tax: z.coerce.number().min(0),
@@ -569,6 +587,7 @@ module.exports = {
   updateProductBody,
   createOrderBody,
   updateOrderBody,
+  createReceiptBody,
   stockMovementBody,
   stockQuerySchema,
   settingUpdateBody,

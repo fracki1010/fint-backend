@@ -41,7 +41,7 @@ const purchaseSchema = new mongoose.Schema(
     },
     paymentCondition: {
       type: String,
-      enum: ["CASH", "CREDIT"],
+      enum: ["CASH", "CREDIT", "CREDIT_15", "CREDIT_30", "CREDIT_45", "CREDIT_60", "CREDIT_90"],
       default: "CASH",
     },
     dueDate: { type: String, default: "" },
@@ -81,13 +81,12 @@ const purchaseSchema = new mongoose.Schema(
     paymentStatus: {
       type: String,
       enum: ["PENDING", "PAID", "PARTIAL"],
-      default: function () {
-        return this.paymentCondition === "CASH" ? "PAID" : "PENDING";
-      },
+      default: "PENDING",
     },
     paymentMethod: { type: String, default: "" },
     paidAt: { type: Date, default: null },
     paidAmount: { type: Number, default: 0 },
+    receiptIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Receipt" }],
   },
   { timestamps: true },
 );

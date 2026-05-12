@@ -20,6 +20,7 @@ const presentationSchema = new mongoose.Schema(
     name: { type: String, required: true },
     unitOfMeasure: { type: String, enum: UNIT_OPTIONS, default: "unidad" },
     price: { type: Number, min: 0 },
+    cost: { type: Number, min: 0 },
     equivalentQty: { type: Number, default: 1, min: 0.001 },
     isActive: { type: Boolean, default: true },
     priceTiers: {
@@ -61,6 +62,7 @@ const productSchema = new mongoose.Schema(
     purchaseEquivalentQty: { type: Number, default: 1, min: 0.001 },
     costLocked: { type: Boolean, default: false },
     presentations: { type: [presentationSchema], default: [] },
+    defaultPresentationId: { type: String, default: null },
     // Price tiers for different client types (retail, wholesale, distributor)
     priceTiers: {
       retail: { type: Number, min: 0, default: null },
