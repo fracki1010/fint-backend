@@ -27,7 +27,7 @@ const PLAN_NAMES = {
 async function createPreference(req, res) {
   try {
     const { plan } = req.body;
-    const tenantId = req.tenantId;
+    const tenantId = req.user?.tenant;
     const userEmail = req.user?.email;
 
     if (!tenantId) {
@@ -238,7 +238,7 @@ async function webhook(req, res) {
  */
 async function getPaymentHistory(req, res) {
   try {
-    const tenantId = req.tenantId;
+    const tenantId = req.user?.tenant;
     if (!tenantId) {
       return sendError(res, { status: 401, code: "UNAUTHORIZED", message: "Tenant no identificado." });
     }

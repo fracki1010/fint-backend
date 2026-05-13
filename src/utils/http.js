@@ -62,9 +62,19 @@ const handleServerError = (res, error, fallbackMessage) => {
   });
 };
 
+const sendSuccess = (res, { data = null, status = 200, message = null } = {}) => {
+  const payload = {
+    success: true,
+    ...(data !== null ? { data } : {}),
+    ...(message ? { message } : {}),
+  };
+  return res.status(status).json(payload);
+};
+
 module.exports = {
   HttpError,
   normalizeValidationDetails,
   sendError,
+  sendSuccess,
   handleServerError,
 };
