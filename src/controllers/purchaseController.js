@@ -171,7 +171,6 @@ exports.getDashboard = async (req, res) => {
 const mapPurchaseWithRelations = async (tenantId, id) =>
   Purchase.findOne({ _id: id, tenant: tenantId })
     .populate("supplier", "name company phone taxId")
-    .populate("items.supply", "name sku unit")
     .populate("items.product", "name sku unitOfMeasure");
 
 exports.getPurchases = async (req, res) => {
@@ -179,7 +178,6 @@ exports.getPurchases = async (req, res) => {
     const tenantId = req.user?.tenant;
     const purchases = await Purchase.find({ tenant: tenantId })
       .populate("supplier", "name company")
-      .populate("items.supply", "name unit")
       .populate("items.product", "name unitOfMeasure")
       .sort({ createdAt: -1 });
 
@@ -386,7 +384,6 @@ exports.cancelPurchase = async (req, res) => {
       const tenantId = req.user?.tenant;
       const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
         .populate("items.product")
-        .populate("items.supply")
         .session(session);
 
       if (!purchase) throw new Error("PURCHASE_NOT_FOUND");
@@ -563,7 +560,6 @@ exports.downloadPurchasePdf = async (req, res) => {
     const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
       .populate("supplier")
       .populate("items.product", "name sku")
-      .populate("items.supply", "name sku")
       .lean();
 
     if (!purchase) {

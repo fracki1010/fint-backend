@@ -1,22 +1,21 @@
 const { createAndDispatchNotification } = require("../services/notificationService");
 
-async function notifyLowStock(userId, supply) {
-  if (!userId || !supply) return;
-  if (!supply.minStock || supply.minStock <= 0) return;
-  if (supply.currentStock > supply.minStock) return;
+async function notifyLowStock(userId, product) {
+  if (!userId || !product) return;
+  if (!product.minStock || product.minStock <= 0) return;
+  if (product.stock > product.minStock) return;
 
   await createAndDispatchNotification({
     userId,
     type: "warning",
-    title: "Stock bajo de insumo",
-    message: `${supply.name}: quedan ${supply.currentStock} ${supply.unit} (mínimo: ${supply.minStock})`,
+    title: "Stock bajo",
+    message: `${product.name}: quedan ${product.stock} ${product.unit || "unidades"} (mínimo: ${product.minStock})`,
     metadata: {
-      type: "LOW_STOCK",
-      supplyId: supply._id?.toString(),
-      supplyName: supply.name,
-      currentStock: supply.currentStock,
-      minStock: supply.minStock,
-      unit: supply.unit,
+      productId: product._id?.toString(),
+      productName: product.name,
+      currentStock: product.stock,
+      minStock: product.minStock,
+      unit: product.unit,
     },
   });
 }

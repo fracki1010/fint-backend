@@ -230,10 +230,11 @@ const supplyMovementBody = z.object({
 const recipeIngredientSchema = z.object({
   supplyItemId: objectId.optional(),
   productItemId: objectId.optional(),
+  product: objectId.optional(),
   presentationId: objectId.optional(),
   quantity: z.coerce.number().positive("Cantidad invalida"),
 }).refine(
-  (data) => data.supplyItemId || data.productItemId,
+  (data) => data.supplyItemId || data.productItemId || data.product,
   {
     message: "Cada ingrediente debe tener un insumo (supplyItemId) o un producto (productItemId).",
   },

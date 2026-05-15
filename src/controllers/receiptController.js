@@ -40,7 +40,7 @@ exports.createReceipt = async (req, res) => {
       // Build a map of ordered quantities for validation
       const orderedMap = new Map();
       for (const item of purchase.items) {
-        const key = item.product?.toString() || item.supply?.toString();
+        const key = item.product?.toString();
         orderedMap.set(key, {
           quantity: item.quantity,
           unitCost: item.unitCost,

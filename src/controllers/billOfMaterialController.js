@@ -1,18 +1,15 @@
 const mongoose = require("mongoose");
 
 const BillOfMaterial = require("../models/billOfMaterial.model");
-let Supply, SupplyMovement;
-try { Supply = require("../models/supply.model").Supply; SupplyMovement = require("../models/supplyMovement.model"); } catch { Supply = null; SupplyMovement = null; }
 const ProductionLog = require("../models/productionLog.model");
-const StockMovement = require("../models/stockMovement.model");
 const { Product } = require("../models/product.model");
+const StockMovement = require("../models/stockMovement.model");
 const { sendError, handleServerError } = require("../utils/http");
 const { notifyLowStock } = require("../utils/stockAlerts");
 
 const POPULATE_BOM = [
-  { path: "product", select: "name sku" },
-  { path: "ingredients.supply", select: "name unit currentStock referenceCost" },
-  { path: "ingredients.product", select: "name unitOfMeasure stock costPrice minStock" },
+  { path: "product", select: "name sku unitOfMeasure presentations" },
+  { path: "ingredients.product", select: "name sku unitOfMeasure stock costPrice minStock presentations" },
 ];
 
 exports.getBillOfMaterials = async (req, res) => {
@@ -79,8 +76,7 @@ exports.createBillOfMaterial = async (req, res) => {
     }
 
     const ingredients = (req.body.ingredients || []).map((ing) => ({
-      supply: ing.supplyItemId || null,
-      product: ing.productItemId || null,
+      product: ing.product || ing.productItemId || null,
       presentationId: ing.presentationId || null,
       quantity: ing.quantity,
     }));
@@ -141,8 +137,7 @@ exports.updateBillOfMaterial = async (req, res) => {
 
     const updatedIngredients = req.body.ingredients
       ? req.body.ingredients.map((ing) => ({
-          supply: ing.supplyItemId || null,
-          product: ing.productItemId || null,
+          product: ing.product || ing.productItemId || null,
           presentationId: ing.presentationId || null,
           quantity: ing.quantity,
         }))
@@ -212,7 +207,6 @@ exports.produceBillOfMaterial = async (req, res) => {
         tenant: tenantId,
         isActive: { $ne: false },
       })
-        .populate("ingredients.supply")
         .populate("ingredients.product")
         .session(session);
 
@@ -238,17 +232,6 @@ exports.produceBillOfMaterial = async (req, res) => {
               needed,
               available: ing.product.stock,
               unit: ing.product.unitOfMeasure || "",
-            });
-          }
-        } else {
-          // Legacy supply-based ingredient
-          const supply = ing.supply;
-          if (!supply || supply.currentStock < needed) {
-            shortages.push({
-              supplyName: supply?.name || "Insumo desconocido",
-              needed,
-              available: supply?.currentStock ?? 0,
-              unit: supply?.unit || "",
             });
           }
         }
@@ -310,43 +293,6 @@ exports.produceBillOfMaterial = async (req, res) => {
             ],
             { session },
           );
-        } else if (ing.supply) {
-          // ── Legacy supply ingredient flow ──
-          const supply = ing.supply;
-          const stockBefore = supply.currentStock;
-          const stockAfter = stockBefore - needed;
-
-          supply.currentStock = stockAfter;
-          await supply.save({ session });
-
-          // Collect supplies that dropped below minimum
-          if (supply.minStock > 0 && stockAfter <= supply.minStock) {
-            lowStockAlerts.push({
-              _id: supply._id,
-              name: supply.name,
-              unit: supply.unit,
-              currentStock: stockAfter,
-              minStock: supply.minStock,
-            });
-          }
-
-          await SupplyMovement.create(
-            [
-              {
-                tenant: tenantId,
-                supply: supply._id,
-                type: "OUT",
-                quantity: needed,
-                stockBefore,
-                stockAfter,
-                reason: `Producción: ${bom.name}${notes ? ` — ${notes}` : ""}`,
-                sourceType: "PRODUCTION",
-                sourceId: bom._id.toString(),
-                createdBy: req.user?._id || null,
-              },
-            ],
-            { session },
-          );
         }
       }
 
@@ -354,9 +300,7 @@ exports.produceBillOfMaterial = async (req, res) => {
       if (bom.product) {
         const unitsProduced = bom.yieldQuantity * batches;
         const totalIngredientCost = bom.ingredients.reduce((sum, ing) => {
-          const cost = ing.product
-            ? (ing.product.costPrice ?? 0)
-            : (ing.supply?.referenceCost ?? 0);
+          const cost = ing.product?.costPrice ?? 0;
           return sum + ing.quantity * cost;
         }, 0);
         const costPerUnit = bom.yieldQuantity > 0 ? totalIngredientCost / bom.yieldQuantity : 0;
@@ -404,8 +348,8 @@ exports.produceBillOfMaterial = async (req, res) => {
 
   // Fire-and-forget alerts after transaction commits
   if (req.user?._id && lowStockAlerts.length > 0) {
-    for (const supply of lowStockAlerts) {
-      notifyLowStock(req.user._id, supply).catch(() => {});
+      for (const prod of lowStockAlerts) {
+        notifyLowStock(req.user._id, prod).catch(() => {});
     }
   }
 

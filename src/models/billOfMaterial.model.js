@@ -2,11 +2,6 @@ const mongoose = require("mongoose");
 
 const ingredientSchema = new mongoose.Schema(
   {
-    supply: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Supply",
-      default: null,
-    },
     product: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
