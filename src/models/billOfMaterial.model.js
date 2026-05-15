@@ -12,6 +12,9 @@ const ingredientSchema = new mongoose.Schema(
       ref: "Product",
       default: null,
     },
+    presentationId: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
     quantity: { type: Number, required: true, min: 0 },
   },
   { _id: false },
@@ -30,6 +33,9 @@ const billOfMaterialSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
       default: null,
+    },
+    presentationId: {
+      type: mongoose.Schema.Types.ObjectId,
     },
     yieldQuantity: { type: Number, default: 1, min: 0 },
     ingredients: [ingredientSchema],

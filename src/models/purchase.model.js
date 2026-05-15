@@ -2,13 +2,10 @@ const mongoose = require("mongoose");
 
 const purchaseItemSchema = new mongoose.Schema(
   {
-    supply: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Supply",
-    },
     product: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
+      required: true,
     },
     presentationId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -60,9 +57,9 @@ const purchaseSchema = new mongoose.Schema(
         {
           validator: (value) =>
             Array.isArray(value) &&
-            value.every((item) => item.supply || item.product),
+            value.every((item) => item.product),
           message:
-            "Cada item debe tener un insumo (supply) o un producto (product).",
+            "Cada item debe tener un producto.",
         },
       ],
     },

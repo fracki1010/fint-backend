@@ -139,8 +139,20 @@ const validatePresentationCollisions = async (
 
 const generateSkuBase = (name, categories) => {
   const categoryPrefix = normalizeSku(categories[0] || "GEN").slice(0, 3) || "GEN";
-  const namePrefix =
-    normalizeSku(name).replace(/-/g, "").slice(0, 5) || "ITEM";
+
+  // Smart acronym: first letter of each word, or first chars if single word
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  let namePrefix;
+  if (words.length <= 1) {
+    namePrefix = normalizeSku(words[0] || "ITEM").replace(/-/g, "").slice(0, 5) || "ITEM";
+  } else {
+    namePrefix = words
+      .filter((w) => w.length > 1 || w === words[0])
+      .map((w) => normalizeSku(w)[0])
+      .join("")
+      .slice(0, 5);
+  }
+  if (!namePrefix) namePrefix = "ITEM";
 
   return `${categoryPrefix}-${namePrefix}`;
 };

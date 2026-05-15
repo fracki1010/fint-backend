@@ -2,7 +2,6 @@ const mongoose = require("mongoose");
 const Client = require("../models/client.model");
 const Order = require("../models/order.model");
 const { Product } = require("../models/product.model");
-const { Supply } = require("../models/supply.model");
 const Purchase = require("../models/purchase.model");
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
 const InventorySnapshot = require("../models/inventorySnapshot.model");
@@ -259,8 +258,8 @@ exports.getSummary = async (req, res) => {
           },
         },
       ]),
-      Supply.find({ tenant: tenantId, isActive: { $ne: false } })
-        .select("name sku currentStock minStock unit")
+      Product.find({ tenant: tenantId, isActive: { $ne: false }, type: "raw_material" })
+        .select("name sku stock minStock unitOfMeasure")
         .sort({ name: 1 })
         .lean(),
       SupplierAccountEntry.aggregate([

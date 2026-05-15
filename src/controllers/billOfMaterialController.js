@@ -1,8 +1,8 @@
 const mongoose = require("mongoose");
 
 const BillOfMaterial = require("../models/billOfMaterial.model");
-const { Supply } = require("../models/supply.model");
-const SupplyMovement = require("../models/supplyMovement.model");
+let Supply, SupplyMovement;
+try { Supply = require("../models/supply.model").Supply; SupplyMovement = require("../models/supplyMovement.model"); } catch { Supply = null; SupplyMovement = null; }
 const ProductionLog = require("../models/productionLog.model");
 const StockMovement = require("../models/stockMovement.model");
 const { Product } = require("../models/product.model");
@@ -81,6 +81,7 @@ exports.createBillOfMaterial = async (req, res) => {
     const ingredients = (req.body.ingredients || []).map((ing) => ({
       supply: ing.supplyItemId || null,
       product: ing.productItemId || null,
+      presentationId: ing.presentationId || null,
       quantity: ing.quantity,
     }));
 
@@ -88,6 +89,7 @@ exports.createBillOfMaterial = async (req, res) => {
       tenant: tenantId,
       name,
       product: req.body.productId || null,
+      presentationId: req.body.presentationId || null,
       yieldQuantity: req.body.yieldQuantity || 1,
       ingredients,
       notes: req.body.notes || "",
@@ -141,6 +143,7 @@ exports.updateBillOfMaterial = async (req, res) => {
       ? req.body.ingredients.map((ing) => ({
           supply: ing.supplyItemId || null,
           product: ing.productItemId || null,
+          presentationId: ing.presentationId || null,
           quantity: ing.quantity,
         }))
       : bom.ingredients;
@@ -151,6 +154,10 @@ exports.updateBillOfMaterial = async (req, res) => {
         req.body.productId !== undefined
           ? req.body.productId || null
           : bom.product,
+      presentationId:
+        req.body.presentationId !== undefined
+          ? req.body.presentationId || null
+          : bom.presentationId,
       yieldQuantity: req.body.yieldQuantity ?? bom.yieldQuantity,
       ingredients: updatedIngredients,
       notes: req.body.notes ?? bom.notes,

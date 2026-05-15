@@ -230,6 +230,7 @@ const supplyMovementBody = z.object({
 const recipeIngredientSchema = z.object({
   supplyItemId: objectId.optional(),
   productItemId: objectId.optional(),
+  presentationId: objectId.optional(),
   quantity: z.coerce.number().positive("Cantidad invalida"),
 }).refine(
   (data) => data.supplyItemId || data.productItemId,
@@ -241,6 +242,7 @@ const recipeIngredientSchema = z.object({
 const createBillOfMaterialBody = z.object({
   name: z.string().trim().min(1, "Nombre requerido"),
   productId: objectId.optional(),
+  presentationId: objectId.optional(),
   yieldQuantity: z.coerce.number().positive("Cantidad invalida").optional(),
   ingredients: z.array(recipeIngredientSchema).optional(),
   notes: z.string().trim().optional(),
@@ -255,18 +257,12 @@ const updateBillOfMaterialBody = z.object({
 });
 
 const purchaseItemBody = z.object({
-  supplyItemId: objectId.optional(),
-  productItemId: objectId.optional(),
+  productItemId: objectId,
   presentationId: objectId.optional(),
   quantity: z.coerce.number().positive("Cantidad invalida"),
   unitCost: z.coerce.number().min(0, "Costo invalido"),
   lineTotal: z.coerce.number().min(0, "Subtotal invalido"),
-}).refine(
-  (data) => data.supplyItemId || data.productItemId,
-  {
-    message: "Cada item debe tener un insumo (supplyItemId) o un producto (productItemId).",
-  },
-);
+});
 
 const createPurchaseBody = z.object({
   supplierId: objectId,

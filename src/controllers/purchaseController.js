@@ -1,13 +1,8 @@
 const mongoose = require("mongoose");
 
 const Purchase = require("../models/purchase.model");
-const { Supply } = require("../models/supply.model");
-const SupplyMovement = require("../models/supplyMovement.model");
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
-const { recalculateAVCO, receiveStock } = require("../services/costingService");
-const { Product } = require("../models/product.model");
-const Receipt = require("../models/receipt.model");
-const StockMovement = require("../models/stockMovement.model");
+const { receiveStock } = require("../services/costingService");
 const { sendError, handleServerError } = require("../utils/http");
 
 exports.getDashboard = async (req, res) => {
@@ -253,9 +248,8 @@ exports.createPurchase = async (req, res) => {
           quantity: item.quantity,
           unitCost: item.unitCost,
           lineTotal: item.lineTotal,
+          product: item.productItemId,
         };
-        if (item.supplyItemId) mapped.supply = item.supplyItemId;
-        if (item.productItemId) mapped.product = item.productItemId;
         if (item.presentationId) mapped.presentationId = item.presentationId;
         return mapped;
       }),
@@ -317,7 +311,6 @@ exports.receivePurchase = async (req, res) => {
     await session.withTransaction(async () => {
       const tenantId = req.user?.tenant;
       const purchase = await Purchase.findOne({ _id: req.params.id, tenant: tenantId })
-        .populate("items.supply")
         .populate("items.product")
         .session(session);
 
@@ -327,88 +320,24 @@ exports.receivePurchase = async (req, res) => {
       const receiptItems = [];
 
       for (const item of purchase.items) {
-        if (item.product) {
-          // ── Product flow — use shared receiveStock ──
-          const result = await receiveStock({
-            tenantId,
-            productId: item.product._id,
-            quantity: Number(item.quantity),
-            unitCost: Number(item.unitCost),
-            presentationId: item.presentationId,
-            purchaseId: purchase._id,
-            reason: `Recepción de compra ${purchase._id}`,
-            session,
-          });
+        const result = await receiveStock({
+          tenantId,
+          productId: item.product,
+          quantity: Number(item.quantity),
+          unitCost: Number(item.unitCost),
+          presentationId: item.presentationId,
+          purchaseId: purchase._id,
+          reason: `Recepción de compra ${purchase._id}`,
+          session,
+        });
 
-          receiptItems.push({
-            product: item.product._id,
-            presentationId: item.presentationId || undefined,
-            quantity: Number(item.quantity),
-            unitCost: Number(item.unitCost),
-            lineTotal: Math.round(Number(item.quantity) * Number(item.unitCost) * 100) / 100,
-          });
-        } else if (item.supply) {
-          // ── Supply flow (legacy) — try Product first since supplies are now Products ──
-          const supplyId = item.supply._id;
-
-          // Check if this is actually a Product (supply→product unification)
-          const product = await Product.findOne({
-            _id: supplyId,
-            tenant: tenantId,
-            isActive: { $ne: false },
-          }).session(session);
-
-          if (product) {
-            // Treat as Product (unified supply)
-            const result = await receiveStock({
-              tenantId,
-              productId: product._id,
-              quantity: Number(item.quantity),
-              unitCost: Number(item.unitCost),
-              purchaseId: purchase._id,
-              reason: `Recepción de compra ${purchase._id}`,
-              session,
-            });
-
-            receiptItems.push({
-              product: product._id,
-              quantity: Number(item.quantity),
-              unitCost: Number(item.unitCost),
-              lineTotal: Math.round(Number(item.quantity) * Number(item.unitCost) * 100) / 100,
-            });
-          } else {
-            // Legacy Supply document
-            const supply = await Supply.findOne({
-              _id: supplyId,
-              tenant: tenantId,
-              isActive: { $ne: false },
-            }).session(session);
-
-            if (!supply) throw new Error("SUPPLY_NOT_FOUND");
-
-            const stockBefore = supply.currentStock;
-            const stockAfter = stockBefore + Number(item.quantity);
-
-            supply.currentStock = stockAfter;
-            await supply.save({ session });
-
-            await SupplyMovement.create(
-              [{
-                tenant: tenantId,
-                supply: supply._id,
-                type: "IN",
-                quantity: Number(item.quantity),
-                stockBefore,
-                stockAfter,
-                reason: `Recepción de compra ${purchase._id}`,
-                sourceType: "PURCHASE",
-                sourceId: String(purchase._id),
-                createdBy: req.user?._id,
-              }],
-              { session },
-            );
-          }
-        }
+        receiptItems.push({
+          product: item.product,
+          presentationId: item.presentationId || undefined,
+          quantity: Number(item.quantity),
+          unitCost: Number(item.unitCost),
+          lineTotal: Math.round(Number(item.quantity) * Number(item.unitCost) * 100) / 100,
+        });
       }
 
       // Create Receipt for this reception
@@ -436,29 +365,14 @@ exports.receivePurchase = async (req, res) => {
     });
   } catch (error) {
     if (error.message === "PURCHASE_NOT_FOUND") {
-      return sendError(res, {
-        status: 404,
-        code: "PURCHASE_NOT_FOUND",
-        message: "Compra no encontrada",
-      });
+      return sendError(res, { status: 404, code: "PURCHASE_NOT_FOUND", message: "Compra no encontrada" });
     }
-
     if (error.message === "INVALID_STATUS_TRANSITION") {
-      return sendError(res, {
-        status: 409,
-        code: "INVALID_STATUS",
-        message: "Solo se pueden recibir compras confirmadas.",
-      });
+      return sendError(res, { status: 409, code: "INVALID_STATUS", message: "Solo se pueden recibir compras confirmadas." });
     }
-
     if (error.message === "PRODUCT_NOT_FOUND") {
-      return sendError(res, {
-        status: 404,
-        code: "PRODUCT_NOT_FOUND",
-        message: "Producto no encontrado durante la recepción.",
-      });
+      return sendError(res, { status: 404, code: "PRODUCT_NOT_FOUND", message: "Producto no encontrado." });
     }
-
     return handleServerError(res, error, "Error al recibir la compra");
   } finally {
     session.endSession();
