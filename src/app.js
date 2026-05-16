@@ -93,6 +93,7 @@ function createApp(options = {}) {
   // Webhook de pagos no requiere auth (viene de MercadoPago)
   app.post("/api/payments/webhook", express.json(), require("./controllers/paymentController").webhook);
   app.use("/api/cash-closing", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashClosingRoutes"));
+  app.use("/api/cash-movements", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashMovementRoutes"));
   app.use("/api/quotes", authMiddleware, planMiddleware.requireFeature("quotes"), require("./routes/quoteRoutes"));
   app.use("/api/banking", authMiddleware, require("./routes/bankingRoutes"));
   app.use(

@@ -153,6 +153,14 @@ const createReceiptBody = z.object({
   items: z.array(receiptItemSchema).min(1, "Debe incluir al menos un item"),
 });
 
+const createCashMovementBody = z.object({
+  date: z.string().trim().min(1, "Fecha requerida"),
+  type: z.enum(["income", "expense"]),
+  category: z.string().trim().min(1, "Categoría requerida"),
+  amount: z.coerce.number().positive("Monto debe ser positivo"),
+  description: z.string().trim().optional(),
+});
+
 const createOrderBody = z.object({
   client: objectId,
   items: z.array(orderItemSchema).min(1, "Debes incluir al menos un item"),
@@ -585,6 +593,7 @@ module.exports = {
   createOrderBody,
   updateOrderBody,
   createReceiptBody,
+  createCashMovementBody,
   stockMovementBody,
   stockQuerySchema,
   settingUpdateBody,
