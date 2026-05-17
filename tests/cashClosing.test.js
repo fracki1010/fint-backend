@@ -45,7 +45,8 @@ async function bootstrapAndGetToken() {
   // Enable features for testing
   const settings = await Setting.findOne({});
   await Tenant.findByIdAndUpdate(settings.tenant, {
-    plan: "business",
+    plan: "app_base",
+    complements: ["expansion", "team_10", "financiero", "bom", "produccion"],
     enabledFeatures: [
       "client_account",
       "supplier_account",
