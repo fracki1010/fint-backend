@@ -10,8 +10,13 @@ const paymentSchema = new mongoose.Schema(
     },
     plan: {
       type: String,
-      enum: ["essential", "business", "enterprise"],
-      required: true,
+      required: false,
+    },
+    complements: [{
+      type: String,
+    }],
+    totalPrice: {
+      type: Number,
     },
     mercadoPagoPaymentId: {
       type: String,

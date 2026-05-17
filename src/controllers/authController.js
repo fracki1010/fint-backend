@@ -45,16 +45,7 @@ const toAuthResponse = async (user) => {
               maxProducts: serializeLimit(tenant.limits.maxProducts),
               maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
             } : undefined,
-            enabledFeatures: (() => {
-              const PLAN_FEATURES = {
-                essential: ["client_account", "supplier_account", "quotes"],
-                business: ["financial_center", "recipes", "bill_of_materials", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
-                enterprise: ["financial_center", "recipes", "bill_of_materials", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
-              };
-              const base = PLAN_FEATURES[tenant.plan] || [];
-              const extra = tenant.enabledFeatures || [];
-              return [...new Set([...base, ...extra])];
-            })(),
+            enabledFeatures: tenant.enabledFeatures || [],
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }
@@ -90,11 +81,11 @@ const createUserInternal = async ({
   }
 
   const passwordHash = await bcrypt.hash(cleanPassword, 10);
-  // Self-registration: Essential con 14 días de trial
+  // Self-registration: App Base con 14 días de trial
   const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
   const tenant = await Tenant.create({
     name: storeName || cleanName,
-    plan: "essential",
+    plan: "app_base",
     trialEndsAt,
   });
 
@@ -176,16 +167,7 @@ exports.me = async (req, res) => {
             plan: tenant.plan,
             status: tenant.status,
             limits: tenant.limits,
-            enabledFeatures: (() => {
-              const PLAN_FEATURES = {
-                essential: [],
-                business: ["financial_center", "recipes", "bill_of_materials", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
-                enterprise: ["financial_center", "recipes", "bill_of_materials", "advanced_reports", "api_access", "supplier_account", "client_account", "team_management", "unlimited_products", "unlimited_orders", "banking", "quotes"],
-              };
-              const base = PLAN_FEATURES[tenant.plan] || [];
-              const extra = tenant.enabledFeatures || [];
-              return [...new Set([...base, ...extra])];
-            })(),
+            enabledFeatures: tenant.enabledFeatures || [],
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }

@@ -28,8 +28,11 @@ function getTransporter() {
   });
 }
 
-function buildWelcomeEmail({ businessName, adminName, email, tempPassword, plan, trialEndsAt }) {
-  const planLabel = { essential: "Essential", business: "Business", enterprise: "Enterprise" }[plan] || plan;
+function buildWelcomeEmail({ businessName, adminName, email, tempPassword, plan, complements = [], trialEndsAt }) {
+  const planLabel = "App Base";
+  const complementLabels = complements.length > 0
+    ? complements.map((c) => c.name || c).join(", ")
+    : null;
   const trialDate = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString("es-AR") : "";
 
   const subject = `Bienvenido a Fint Suite — Tu cuenta está lista`;
@@ -68,7 +71,8 @@ function buildWelcomeEmail({ businessName, adminName, email, tempPassword, plan,
       <p class="subtitle">Tu cuenta para <strong>${businessName}</strong> ha sido creada exitosamente.</p>
 
       <div style="margin-bottom: 20px;">
-        <span class="plan-badge">Plan ${planLabel}</span>
+        <span class="plan-badge">${planLabel}</span>
+        ${complementLabels ? `<span class="plan-badge" style="margin-left: 8px; background: rgba(16,185,129,0.12); color: #34d399;">+ ${complementLabels}</span>` : ""}
       </div>
 
       <div class="field">
@@ -108,7 +112,7 @@ Bienvenido a Fint Suite
 Hola ${adminName},
 Tu cuenta para ${businessName} ha sido creada exitosamente.
 
-Plan: ${planLabel}
+Plan: ${planLabel}${complementLabels ? ` + ${complementLabels}` : ""}
 Email: ${email}
 ${tempPassword ? `Contraseña temporal: ${tempPassword}` : ""}
 ${trialDate ? `Período de prueba hasta: ${trialDate}` : ""}

@@ -7,28 +7,15 @@ const AuditLog = require("../models/auditLog.model");
 const { handleServerError } = require("../utils/http");
 const { sendEmail, buildWelcomeEmail } = require("../services/emailService");
 const bcrypt = require("bcryptjs");
+const {
+  COMPLEMENTS,
+  APP_BASE,
+  deriveEnabledFeatures,
+  deriveLimits,
+  computeTotalPrice,
+} = require("../config/complementConfig");
 
-// Helper: Plan configurations
-const PLAN_CONFIGS = {
-  essential: {
-    maxUsers: 3,
-    maxProducts: 200,
-    maxOrdersPerMonth: 500,
-    features: [],
-  },
-  business: {
-    maxUsers: 10,
-    maxProducts: Infinity,
-    maxOrdersPerMonth: Infinity,
-    features: ["financial_center", "recipes", "bill_of_materials", "quotes"],
-  },
-  enterprise: {
-    maxUsers: Infinity,
-    maxProducts: Infinity,
-    maxOrdersPerMonth: Infinity,
-    features: ["financial_center", "recipes", "bill_of_materials", "advanced_reports", "api_access", "quotes"],
-  },
-};
+const serializeLimit = (value) => (value === Infinity ? -1 : value);
 
 /**
  * @desc    Get all tenants with pagination and filters
@@ -40,7 +27,6 @@ const getAllTenants = async (req, res) => {
     const {
       page = 1,
       limit = 20,
-      plan,
       status = "active",
       search,
       sortBy = "createdAt",
@@ -50,7 +36,6 @@ const getAllTenants = async (req, res) => {
     // Build filter
     const filter = {};
     
-    if (plan) filter.plan = plan;
     if (status) filter.status = status;
     if (search) {
       filter.$or = [
@@ -134,12 +119,12 @@ const getTenantById = async (req, res) => {
       },
     });
 
-    // Calculate usage percentages
-    const planConfig = PLAN_CONFIGS[tenant.plan] || PLAN_CONFIGS.essential;
+    // Calculate usage percentages from complements
+    const limits = deriveLimits(tenant.complements);
     
     const usagePercentages = {
-      users: planConfig.maxUsers === Infinity ? 0 : Math.round((totalUsers / planConfig.maxUsers) * 100),
-      products: planConfig.maxProducts === Infinity ? 0 : Math.round((totalProducts / planConfig.maxProducts) * 100),
+      users: limits.maxUsers === Infinity || limits.maxUsers === -1 ? 0 : Math.round((totalUsers / limits.maxUsers) * 100),
+      products: limits.maxProducts === Infinity || limits.maxProducts === -1 ? 0 : Math.round((totalProducts / limits.maxProducts) * 100),
     };
 
     return res.json({
@@ -180,7 +165,7 @@ const createTenant = async (req, res) => {
       adminEmail,
       adminName,
       adminPhone,
-      plan = "essential",
+      complements = [],
       passwordType = "auto", // "auto" or "custom"
       customPassword,
       sendWelcomeEmail = false,
@@ -215,23 +200,27 @@ const createTenant = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
-    // Get plan configuration
-    const planConfig = PLAN_CONFIGS[plan] || PLAN_CONFIGS.essential;
+    // Validate complement IDs if provided
+    for (const compId of complements) {
+      if (!COMPLEMENTS[compId]) {
+        return res.status(400).json({
+          success: false,
+          message: `Complemento inválido: ${compId}`,
+        });
+      }
+    }
 
-    // Trial: solo Essential y Business tienen 14 días gratis. Enterprise no.
-    const trialDays = plan === "enterprise" ? 0 : 14;
-    const trialEndsAt = trialDays > 0 ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000) : undefined;
+    // All new tenants default to app_base
+    const trialDays = 14;
+    const trialEndsAt = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
 
     const tenant = await Tenant.create({
       name: businessName,
-      plan,
+      plan: "app_base",
       status: "active",
-      limits: {
-        maxUsers: planConfig.maxUsers,
-        maxProducts: planConfig.maxProducts,
-        maxOrdersPerMonth: planConfig.maxOrdersPerMonth,
-      },
-      enabledFeatures: planConfig.features,
+      limits: deriveLimits(complements),
+      enabledFeatures: deriveEnabledFeatures(complements),
+      complements,
       metadata: {
         source: "manual",
         notes,
@@ -278,7 +267,8 @@ const createTenant = async (req, res) => {
           adminName,
           email: adminEmail,
           tempPassword: passwordType === "auto" ? tempPassword : undefined,
-          plan,
+          plan: "app_base",
+          complements,
           trialEndsAt: tenant.trialEndsAt,
         });
         console.log("[SUPERADMIN] Attempting to send welcome email to:", adminEmail);
@@ -300,7 +290,8 @@ const createTenant = async (req, res) => {
       tenant: tenant._id,
       details: {
         businessName,
-        plan,
+        plan: "app_base",
+        complements,
         adminEmail,
         passwordType,
         sendWelcomeEmail,
@@ -333,13 +324,13 @@ const createTenant = async (req, res) => {
 };
 
 /**
- * @desc    Update tenant (plan, status, limits, etc.)
+ * @desc    Update tenant (complements, status, limits, etc.)
  * @route   PATCH /api/superadmin/tenants/:id
  * @access  SuperAdmin only
  */
 const updateTenant = async (req, res) => {
   try {
-    const { plan, status, limits, enabledFeatures, billing, metadata } = req.body;
+    const { complements, status, limits, enabledFeatures, billing, metadata } = req.body;
     
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) {
@@ -349,25 +340,29 @@ const updateTenant = async (req, res) => {
       });
     }
 
-    const oldPlan = tenant.plan;
+    const oldComplements = [...(tenant.complements || [])];
     const updates = {};
 
-    // Update plan
-    if (plan && PLAN_CONFIGS[plan]) {
-      updates.plan = plan;
-      const planConfig = PLAN_CONFIGS[plan];
-      updates.limits = {
-        maxUsers: planConfig.maxUsers,
-        maxProducts: planConfig.maxProducts,
-        maxOrdersPerMonth: planConfig.maxOrdersPerMonth,
-      };
-      updates.enabledFeatures = planConfig.features;
+    // Update complements
+    if (complements !== undefined) {
+      // Validate complement IDs
+      for (const compId of complements) {
+        if (!COMPLEMENTS[compId]) {
+          return res.status(400).json({
+            success: false,
+            message: `Complemento inválido: ${compId}`,
+          });
+        }
+      }
+      updates.complements = complements;
+      updates.limits = deriveLimits(complements);
+      updates.enabledFeatures = deriveEnabledFeatures(complements);
     }
 
     // Update status
     if (status) updates.status = status;
     
-    // Update custom limits (override plan defaults)
+    // Update custom limits (override complement defaults)
     if (limits) updates.limits = { ...tenant.limits, ...limits };
     
     // Update features
@@ -386,13 +381,14 @@ const updateTenant = async (req, res) => {
     );
 
     // Create audit log
+    const complementChanged = complements !== undefined && JSON.stringify(oldComplements) !== JSON.stringify(complements);
     await AuditLog.create({
-      action: plan && plan !== oldPlan ? "tenant.plan_changed" : "tenant.updated",
+      action: complementChanged ? "tenant.plan_changed" : "tenant.updated",
       admin: req.user._id,
       tenant: tenant._id,
       details: {
-        oldPlan,
-        newPlan: plan || oldPlan,
+        oldComplements,
+        newComplements: complements || oldComplements,
         changes: Object.keys(updates),
       },
       ip: req.ip,
@@ -466,24 +462,20 @@ const getAnalytics = async (req, res) => {
       suspendedTenants,
       cancelledTenants,
       newThisMonth,
-      planDistribution,
     ] = await Promise.all([
       Tenant.countDocuments(),
       Tenant.countDocuments({ status: "active" }),
       Tenant.countDocuments({ status: "suspended" }),
       Tenant.countDocuments({ status: "cancelled" }),
       Tenant.countDocuments({ createdAt: { $gte: startOfMonth } }),
-      Tenant.aggregate([
-        { $group: { _id: "$plan", count: { $sum: 1 } } },
-      ]),
     ]);
 
-    // Calculate MRR
-    const prices = { essential: 2, business: 3, enterprise: 8 };
+    // Calculate MRR from active tenants' complements
+    const activeTenantList = await Tenant.find({ status: "active" }).select("complements").lean();
     let mrr = 0;
-    planDistribution.forEach(p => {
-      mrr += (p.count * (prices[p._id] || 0));
-    });
+    for (const t of activeTenantList) {
+      mrr += computeTotalPrice(t.complements || []);
+    }
 
     return res.json({
       success: true,
@@ -495,10 +487,6 @@ const getAnalytics = async (req, res) => {
           cancelledTenants,
           newThisMonth,
         },
-        plans: planDistribution.reduce((acc, curr) => {
-          acc[curr._id] = { count: curr.count, percentage: Math.round((curr.count / totalTenants) * 100) };
-          return acc;
-        }, {}),
         revenue: {
           mrr,
           arr: mrr * 12,

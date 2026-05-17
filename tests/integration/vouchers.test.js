@@ -21,6 +21,7 @@ const VoucherCounter = require("../../src/models/voucherCounter.model");
 const Order = require("../../src/models/order.model");
 const Client = require("../../src/models/client.model");
 const Setting = require("../../src/models/setting.model");
+const Tenant = require("../../src/models/tenant.model");
 
 let mongoServer;
 let app;
@@ -45,6 +46,25 @@ async function bootstrapAndGetToken() {
 
   expect(bootstrapResponse.status).toBe(201);
   expect(bootstrapResponse.body.token).toBeTruthy();
+
+  // Enable features for testing
+  const settings = await Setting.findOne({});
+  await Tenant.findByIdAndUpdate(settings.tenant, {
+    plan: "app_base",
+    complements: ["expansion", "team_10", "financiero", "bom", "produccion"],
+    enabledFeatures: [
+      "client_account",
+      "supplier_account",
+      "quotes",
+      "financial_center",
+      "recipes",
+      "bill_of_materials",
+      "team_management",
+      "unlimited_products",
+      "unlimited_orders",
+      "banking",
+    ],
+  });
 
   return bootstrapResponse.body.token;
 }

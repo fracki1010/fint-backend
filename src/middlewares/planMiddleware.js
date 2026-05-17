@@ -1,41 +1,11 @@
 const { sendError } = require("../utils/http");
 const Tenant = require("../models/tenant.model");
 
-const FEATURE_MATRIX = {
-  essential: ["client_account", "supplier_account", "quotes"],
-  business: [
-    "financial_center",
-    "recipes",
-    "bill_of_materials",
-    "supplier_account",
-    "client_account",
-    "team_management",
-    "unlimited_products",
-    "unlimited_orders",
-    "banking",
-    "quotes",
-  ],
-  enterprise: [
-    "financial_center",
-    "recipes",
-    "bill_of_materials",
-    "supplier_account",
-    "client_account",
-    "team_management",
-    "unlimited_products",
-    "unlimited_orders",
-    "banking",
-    "quotes",
-    "advanced_reports",
-    "api_access",
-  ],
-};
-
 function requireFeature(feature) {
   return async (req, res, next) => {
     try {
       const tenant = await Tenant.findById(req.user.tenant)
-        .select("plan enabledFeatures limits usage")
+        .select("enabledFeatures limits usage")
         .lean();
 
       if (!tenant) {
@@ -46,10 +16,7 @@ function requireFeature(feature) {
         });
       }
 
-      // enabledFeatures extends plan defaults (can only ADD features, never remove)
-      const base = FEATURE_MATRIX[tenant.plan] || [];
-      const extra = tenant.enabledFeatures || [];
-      const features = [...new Set([...base, ...extra])];
+      const features = tenant.enabledFeatures || [];
 
       if (!features.includes(feature)) {
         return sendError(res, {
@@ -100,4 +67,4 @@ function checkLimit(limitKey) {
   };
 }
 
-module.exports = { requireFeature, checkLimit, FEATURE_MATRIX };
+module.exports = { requireFeature, checkLimit };
