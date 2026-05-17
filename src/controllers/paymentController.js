@@ -3,30 +3,25 @@ const { sendError, sendSuccess } = require("../utils/http");
 const Tenant = require("../models/tenant.model");
 const PaymentRecord = require("../models/payment.model");
 const { logInfo, logError } = require("../utils/logger");
+const {
+  COMPLEMENTS,
+  APP_BASE,
+  deriveEnabledFeatures,
+  deriveLimits,
+  computeTotalPrice,
+} = require("../config/complementConfig");
 
 const client = new MercadoPagoConfig({
   accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN || "",
 });
 
-const PLAN_PRICES = {
-  essential: 2000,   // $20.00 ARS (en centavos: 2000)
-  business: 3000,    // $30.00 ARS
-  enterprise: 8000,  // $80.00 ARS
-};
-
-const PLAN_NAMES = {
-  essential: "Fint Essential",
-  business: "Fint Business",
-  enterprise: "Fint Enterprise",
-};
-
 /**
  * POST /api/payments/create-preference
- * Crea una preferencia de pago en MercadoPago para el plan seleccionado.
+ * Crea una preferencia de pago en MercadoPago para los complementos seleccionados.
  */
 async function createPreference(req, res) {
   try {
-    const { plan } = req.body;
+    const { complements } = req.body;
     const tenantId = req.user?.tenant;
     const userEmail = req.user?.email;
 
@@ -34,8 +29,15 @@ async function createPreference(req, res) {
       return sendError(res, { status: 401, code: "UNAUTHORIZED", message: "Tenant no identificado." });
     }
 
-    if (!plan || !PLAN_PRICES[plan]) {
-      return sendError(res, { status: 400, code: "INVALID_PLAN", message: "Plan no válido." });
+    if (!Array.isArray(complements)) {
+      return sendError(res, { status: 400, code: "INVALID_PLAN", message: "Debe enviar un array de complementos." });
+    }
+
+    // Validate complement IDs
+    for (const compId of complements) {
+      if (!COMPLEMENTS[compId]) {
+        return sendError(res, { status: 400, code: "INVALID_PLAN", message: `Complemento no válido: ${compId}.` });
+      }
     }
 
     const tenant = await Tenant.findById(tenantId);
@@ -43,8 +45,8 @@ async function createPreference(req, res) {
       return sendError(res, { status: 404, code: "TENANT_NOT_FOUND", message: "Tenant no encontrado." });
     }
 
-    const price = PLAN_PRICES[plan];
-    const title = PLAN_NAMES[plan];
+    const totalPrice = computeTotalPrice(complements);
+    const title = "Fint Suite — Suscripción mensual";
 
     const preference = new Preference(client);
     const baseUrl = process.env.FRONTEND_URL || "http://localhost:5173";
@@ -53,18 +55,18 @@ async function createPreference(req, res) {
       body: {
         items: [
           {
-            id: `plan-${plan}`,
+            id: `complements-${complements.join("-")}`,
             title,
-            description: `Suscripción mensual - ${title}`,
+            description: `App Base + ${complements.length > 0 ? complements.join(", ") : "sin complementos"}`,
             quantity: 1,
-            unit_price: price,
+            unit_price: totalPrice,
             currency_id: "ARS",
           },
         ],
         payer: {
           email: userEmail || tenant.billing?.email || "cliente@example.com",
         },
-        external_reference: JSON.stringify({ tenantId: tenantId.toString(), plan }),
+        external_reference: JSON.stringify({ tenantId: tenantId.toString(), complements, totalPrice }),
         back_urls: {
           success: `${baseUrl}/admin/company?payment=success`,
           pending: `${baseUrl}/admin/company?payment=pending`,
@@ -112,8 +114,8 @@ async function processApprovedPayment(paymentData) {
       return;
     }
 
-    const { tenantId, plan } = refData;
-    if (!tenantId || !plan) {
+    const { tenantId, complements, totalPrice } = refData;
+    if (!tenantId || !Array.isArray(complements)) {
       logInfo("mp_webhook_missing_data", { paymentId: paymentData.id, refData });
       return;
     }
@@ -135,7 +137,9 @@ async function processApprovedPayment(paymentData) {
     // Guardar/actualizar registro de pago
     const paymentRecord = existing || new PaymentRecord({
       tenant: tenantId,
-      plan,
+      plan: tenant.plan,
+      complements,
+      totalPrice: totalPrice || paymentData.transaction_amount,
       mercadoPagoPaymentId: String(paymentData.id),
       mercadoPagoPreferenceId: paymentData.preference_id,
       amount: paymentData.transaction_amount,
@@ -158,12 +162,14 @@ async function processApprovedPayment(paymentData) {
 
     await paymentRecord.save();
 
-    // Actualizar tenant: cambiar plan y extender suscripción
+    // Actualizar tenant: activar complementos y extender suscripción
     const now = new Date();
     const oneMonthLater = new Date(now);
     oneMonthLater.setMonth(oneMonthLater.getMonth() + 1);
 
-    tenant.plan = plan;
+    tenant.complements = complements;
+    tenant.enabledFeatures = deriveEnabledFeatures(complements);
+    tenant.limits = deriveLimits(complements);
     tenant.status = "active";
     tenant.billing = {
       ...tenant.billing,
@@ -177,7 +183,7 @@ async function processApprovedPayment(paymentData) {
     logInfo("mp_webhook_payment_processed", {
       paymentId: paymentData.id,
       tenantId,
-      plan,
+      complements,
       amount: paymentData.transaction_amount,
     });
   } catch (error) {
@@ -259,4 +265,5 @@ module.exports = {
   createPreference,
   webhook,
   getPaymentHistory,
+  processApprovedPayment,
 };
