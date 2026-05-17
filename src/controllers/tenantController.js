@@ -3,54 +3,15 @@ const User = require("../models/user.model");
 const { Product } = require("../models/product.model");
 const Order = require("../models/order.model");
 const { handleServerError } = require("../utils/http");
+const {
+  COMPLEMENTS,
+  APP_BASE,
+  deriveEnabledFeatures,
+  deriveLimits,
+  computeTotalPrice,
+} = require("../config/complementConfig");
 
-const PLAN_CONFIGS = {
-  essential: {
-    maxUsers: 3,
-    maxProducts: 200,
-    maxOrdersPerMonth: 500,
-    features: [],
-    price: 2,
-  },
-  business: {
-    maxUsers: 10,
-    maxProducts: Infinity,
-    maxOrdersPerMonth: Infinity,
-    features: [
-      "financial_center",
-      "recipes",
-      "bill_of_materials",
-      "supplier_account",
-      "client_account",
-      "team_management",
-      "unlimited_products",
-      "unlimited_orders",
-      "banking",
-      "quotes",
-    ],
-    price: 3,
-  },
-  enterprise: {
-    maxUsers: Infinity,
-    maxProducts: Infinity,
-    maxOrdersPerMonth: Infinity,
-    features: [
-      "financial_center",
-      "recipes",
-      "bill_of_materials",
-      "advanced_reports",
-      "api_access",
-      "supplier_account",
-      "client_account",
-      "team_management",
-      "unlimited_products",
-      "unlimited_orders",
-      "banking",
-      "quotes",
-    ],
-    price: 8,
-  },
-};
+const serializeLimit = (value) => (value === Infinity ? -1 : value);
 
 exports.getTenantPlan = async (req, res) => {
   try {
@@ -76,54 +37,62 @@ exports.getTenantPlan = async (req, res) => {
       },
     });
 
-    const planConfig = PLAN_CONFIGS[tenant.plan] || PLAN_CONFIGS.essential;
+    const limits = deriveLimits(tenant.complements);
+    const enabledFeatures = deriveEnabledFeatures(tenant.complements);
+
     const usagePercentages = {
-      users: planConfig.maxUsers === Infinity ? 0 : Math.round((totalUsers / planConfig.maxUsers) * 100),
-      products: planConfig.maxProducts === Infinity ? 0 : Math.round((totalProducts / planConfig.maxProducts) * 100),
-      orders: planConfig.maxOrdersPerMonth === Infinity ? 0 : Math.round((ordersThisMonth / planConfig.maxOrdersPerMonth) * 100),
+      users: limits.maxUsers === -1 || limits.maxUsers === Infinity ? 0 : Math.round((totalUsers / limits.maxUsers) * 100),
+      products: limits.maxProducts === -1 || limits.maxProducts === Infinity ? 0 : Math.round((totalProducts / limits.maxProducts) * 100),
+      orders: limits.maxOrdersPerMonth === -1 || limits.maxOrdersPerMonth === Infinity ? 0 : Math.round((ordersThisMonth / limits.maxOrdersPerMonth) * 100),
     };
 
-    // Infinity no es serializable a JSON → convertir a -1 (frontend lo interpreta como ilimitado)
-    const serializeLimit = (value) => (value === Infinity ? -1 : value);
-
-    const availablePlans = Object.entries(PLAN_CONFIGS).map(([key, config]) => ({
-      id: key,
-      name: key.charAt(0).toUpperCase() + key.slice(1),
-      price: config.price,
-      maxUsers: serializeLimit(config.maxUsers),
-      maxProducts: serializeLimit(config.maxProducts),
-      maxOrdersPerMonth: serializeLimit(config.maxOrdersPerMonth),
-      features: config.features,
-      isCurrent: key === tenant.plan,
+    const availableComplements = Object.values(COMPLEMENTS).map((comp) => ({
+      id: comp.id,
+      name: comp.name,
+      price: comp.price,
+      features: comp.features || [],
+      limits: comp.limits ? Object.fromEntries(
+        Object.entries(comp.limits).map(([k, v]) => [k, serializeLimit(v)])
+      ) : {},
+      isActive: tenant.complements?.includes(comp.id) || false,
     }));
 
     return res.json({
       success: true,
       plan: {
-        current: tenant.plan,
+        current: tenant.plan || "app_base",
         status: tenant.status,
+        complements: tenant.complements || [],
+        enabledFeatures,
         limits: {
-          maxUsers: serializeLimit(tenant.limits?.maxUsers),
-          maxProducts: serializeLimit(tenant.limits?.maxProducts),
-          maxOrdersPerMonth: serializeLimit(tenant.limits?.maxOrdersPerMonth),
+          maxUsers: serializeLimit(limits.maxUsers),
+          maxProducts: serializeLimit(limits.maxProducts),
+          maxOrdersPerMonth: serializeLimit(limits.maxOrdersPerMonth),
         },
         usage: { currentUsers: totalUsers, currentProducts: totalProducts, ordersThisMonth },
         usagePercentages,
         billing: tenant.billing,
         trialEndsAt: tenant.trialEndsAt,
       },
-      availablePlans,
+      availableComplements,
     });
   } catch (error) {
     return handleServerError(res, error, "Error al obtener plan");
   }
 };
 
-exports.changePlan = async (req, res) => {
+exports.activateComplements = async (req, res) => {
   try {
-    const { plan } = req.body;
-    if (!plan || !PLAN_CONFIGS[plan]) {
-      return res.status(400).json({ success: false, message: "Plan inválido" });
+    const { complements } = req.body;
+    if (!Array.isArray(complements)) {
+      return res.status(400).json({ success: false, message: "complements debe ser un array" });
+    }
+
+    // Validate all complement IDs
+    for (const compId of complements) {
+      if (!COMPLEMENTS[compId]) {
+        return res.status(400).json({ success: false, message: `Complemento inválido: ${compId}` });
+      }
     }
 
     const tenant = await Tenant.findById(req.user.tenant);
@@ -131,28 +100,29 @@ exports.changePlan = async (req, res) => {
       return res.status(404).json({ success: false, message: "Tenant no encontrado" });
     }
 
-    const oldPlan = tenant.plan;
-    const planConfig = PLAN_CONFIGS[plan];
-
-    tenant.plan = plan;
-    tenant.limits = {
-      maxUsers: planConfig.maxUsers,
-      maxProducts: planConfig.maxProducts,
-      maxOrdersPerMonth: planConfig.maxOrdersPerMonth,
-    };
-    tenant.enabledFeatures = planConfig.features;
+    tenant.complements = complements;
+    tenant.limits = deriveLimits(complements);
+    tenant.enabledFeatures = deriveEnabledFeatures(complements);
     await tenant.save();
+
+    const totalPrice = computeTotalPrice(complements);
 
     return res.json({
       success: true,
-      message: `Plan actualizado a ${plan}`,
+      message: "Complementos actualizados",
       plan: {
         current: tenant.plan,
-        limits: tenant.limits,
+        complements: tenant.complements,
+        limits: {
+          maxUsers: serializeLimit(tenant.limits.maxUsers),
+          maxProducts: serializeLimit(tenant.limits.maxProducts),
+          maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
+        },
         enabledFeatures: tenant.enabledFeatures,
+        totalPrice,
       },
     });
   } catch (error) {
-    return handleServerError(res, error, "Error al cambiar plan");
+    return handleServerError(res, error, "Error al activar complementos");
   }
 };
