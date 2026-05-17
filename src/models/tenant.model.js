@@ -15,8 +15,7 @@ const tenantSchema = new mongoose.Schema(
     // Plan and Status
     plan: {
       type: String,
-      enum: ["essential", "business", "enterprise"],
-      default: "essential",
+      default: "app_base",
     },
     status: {
       type: String,
@@ -50,25 +49,14 @@ const tenantSchema = new mongoose.Schema(
       createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
     
-    // Enabled Features (override plan defaults)
+    // Active complements (e.g. ["expansion", "team_10"])
+    complements: [{
+      type: String,
+    }],
+
+    // Enabled Features (source of truth for feature gating)
     enabledFeatures: [{
       type: String,
-      enum: [
-        "whatsapp",
-        "financial_center",
-        "recipes",
-        "bill_of_materials",
-        "api_access",
-        "advanced_reports",
-        "multi_location",
-        "supplier_account",
-        "client_account",
-        "team_management",
-        "unlimited_products",
-        "unlimited_orders",
-        "banking",
-        "quotes",
-      ],
     }],
     
     // Current Usage Metrics (updated periodically)
