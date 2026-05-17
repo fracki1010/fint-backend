@@ -42,9 +42,23 @@ async function bootstrapAndGetToken() {
   expect(bootstrapResponse.status).toBe(201);
   expect(bootstrapResponse.body.token).toBeTruthy();
 
-  // Upgrade tenant to business so financial_center feature is available
+  // Enable features for testing
   const settings = await Setting.findOne({});
-  await Tenant.findByIdAndUpdate(settings.tenant, { plan: "business" });
+  await Tenant.findByIdAndUpdate(settings.tenant, {
+    plan: "business",
+    enabledFeatures: [
+      "client_account",
+      "supplier_account",
+      "quotes",
+      "financial_center",
+      "recipes",
+      "bill_of_materials",
+      "team_management",
+      "unlimited_products",
+      "unlimited_orders",
+      "banking",
+    ],
+  });
 
   return bootstrapResponse.body.token;
 }

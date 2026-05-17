@@ -14,6 +14,8 @@ process.env.AUTH_BOOTSTRAP_ENABLED = "true";
 process.env.CORS_ORIGINS = "http://localhost:5173";
 
 const { createApp } = require("../src/app");
+const Setting = require("../src/models/setting.model");
+const Tenant = require("../src/models/tenant.model");
 
 let mongoServer;
 let app;
@@ -38,6 +40,24 @@ async function bootstrapAndGetToken() {
 
   expect(bootstrapResponse.status).toBe(201);
   expect(bootstrapResponse.body.token).toBeTruthy();
+
+  // Enable features for testing
+  const settings = await Setting.findOne({});
+  await Tenant.findByIdAndUpdate(settings.tenant, {
+    plan: "business",
+    enabledFeatures: [
+      "client_account",
+      "supplier_account",
+      "quotes",
+      "financial_center",
+      "recipes",
+      "bill_of_materials",
+      "team_management",
+      "unlimited_products",
+      "unlimited_orders",
+      "banking",
+    ],
+  });
 
   return bootstrapResponse.body.token;
 }
