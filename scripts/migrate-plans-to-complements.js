@@ -1,39 +1,21 @@
 #!/usr/bin/env node
 /**
- * @fileoverview Migration script: map old rigid plans to App Base + Complements.
+ * @fileoverview Migration script: reset ALL tenants to App Base only (no complements).
  *
- * Mappings:
- *   essential  → plan: "app_base", complements: [], enabledFeatures from APP_BASE
- *   business   → plan: "app_base", complements: ["expansion","team_10","financiero","bom","produccion"], enabledFeatures from APP_BASE + those complements
- *   enterprise → plan: "app_base", complements: [all], enabledFeatures all features
+ * Strategy:
+ *   ALL tenants → plan: "app_base", complements: [], enabledFeatures from APP_BASE only
  *
- * Idempotent: skips tenants already migrated (plan === "app_base" AND complements is non-null).
+ * Idempotent: skips tenants already on app_base with empty complements.
  */
 
 const mongoose = require("mongoose");
 const Tenant = require("../src/models/tenant.model");
 const {
-  COMPLEMENTS,
   deriveEnabledFeatures,
   deriveLimits,
 } = require("../src/config/complementConfig");
 
-const ALL_COMPLEMENT_IDS = Object.keys(COMPLEMENTS);
-
-const PLAN_MAPPING = {
-  essential: {
-    plan: "app_base",
-    complements: [],
-  },
-  business: {
-    plan: "app_base",
-    complements: ["expansion", "team_10", "financiero", "bom", "produccion"],
-  },
-  enterprise: {
-    plan: "app_base",
-    complements: [...ALL_COMPLEMENT_IDS],
-  },
-};
+const OLD_PLANS = ["essential", "business", "enterprise"];
 
 async function run() {
   const uri = process.env.MONGODB_URI || "mongodb://localhost:27017/fint";
@@ -42,13 +24,14 @@ async function run() {
   await mongoose.connect(uri);
   console.log("[migrate-plans] Connected.");
 
-  const oldPlans = Object.keys(PLAN_MAPPING);
-
-  // Count work
+  // Count work — include old plans AND any tenant that might still have complements
   const totalToMigrate = await Tenant.countDocuments({
-    plan: { $in: oldPlans },
+    $or: [
+      { plan: { $in: OLD_PLANS } },
+      { complements: { $exists: true, $not: { $size: 0 } } },
+    ],
   });
-  console.log(`[migrate-plans] Tenants to migrate: ${totalToMigrate}`);
+  console.log(`[migrate-plans] Tenants to reset to App Base: ${totalToMigrate}`);
 
   if (totalToMigrate === 0) {
     console.log("[migrate-plans] Nothing to migrate. Exiting.");
@@ -56,32 +39,30 @@ async function run() {
     process.exit(0);
   }
 
-  const cursor = Tenant.find({ plan: { $in: oldPlans } }).cursor();
+  const cursor = Tenant.find({
+    $or: [
+      { plan: { $in: OLD_PLANS } },
+      { complements: { $exists: true, $not: { $size: 0 } } },
+    ],
+  }).cursor();
+
   let processed = 0;
   let skipped = 0;
   let errors = 0;
 
   for (let tenant = await cursor.next(); tenant != null; tenant = await cursor.next()) {
     try {
-      // Idempotency guard: if already app_base with complements array present, skip
-      if (tenant.plan === "app_base" && Array.isArray(tenant.complements)) {
+      // Idempotency guard: already app_base with empty complements
+      if (tenant.plan === "app_base" && Array.isArray(tenant.complements) && tenant.complements.length === 0) {
         skipped += 1;
         continue;
       }
 
-      const mapping = PLAN_MAPPING[tenant.plan];
-      if (!mapping) {
-        console.warn(`[migrate-plans] Unknown plan "${tenant.plan}" for tenant ${tenant._id}, skipping.`);
-        skipped += 1;
-        continue;
-      }
+      const enabledFeatures = deriveEnabledFeatures([]);
+      const limits = deriveLimits([]);
 
-      const complements = mapping.complements;
-      const enabledFeatures = deriveEnabledFeatures(complements);
-      const limits = deriveLimits(complements);
-
-      tenant.plan = mapping.plan;
-      tenant.complements = complements;
+      tenant.plan = "app_base";
+      tenant.complements = [];
       tenant.enabledFeatures = enabledFeatures;
       tenant.limits = limits;
 
@@ -93,7 +74,7 @@ async function run() {
       }
     } catch (err) {
       errors += 1;
-      console.error(`[migrate-plans] Error migrating tenant ${tenant._id}:`, err.message);
+      console.error(`[migrate-plans] Error resetting tenant ${tenant._id}:`, err.message);
     }
   }
 
