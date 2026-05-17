@@ -89,9 +89,9 @@ function createApp(options = {}) {
     authMiddleware,
     require("./routes/superAdminRoutes"),
   );
-  app.use("/api/payments", authMiddleware, require("./routes/paymentRoutes"));
-  // Webhook de pagos no requiere auth (viene de MercadoPago)
+  // Webhook de pagos no requiere auth (viene de MercadoPago) — debe ir antes del app.use de /api/payments
   app.post("/api/payments/webhook", express.json(), require("./controllers/paymentController").webhook);
+  app.use("/api/payments", authMiddleware, require("./routes/paymentRoutes"));
   app.use("/api/cash-closing", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashClosingRoutes"));
   app.use("/api/cash-movements", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashMovementRoutes"));
   app.use("/api/quotes", authMiddleware, planMiddleware.requireFeature("quotes"), require("./routes/quoteRoutes"));
