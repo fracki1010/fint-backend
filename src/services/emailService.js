@@ -29,7 +29,7 @@ function getTransporter() {
 }
 
 function buildWelcomeEmail({ businessName, adminName, email, tempPassword, plan, complements = [], trialEndsAt }) {
-  const planLabel = "App Base";
+  const planLabel = "Edición estándar";
   const complementLabels = complements.length > 0
     ? complements.map((c) => c.name || c).join(", ")
     : null;

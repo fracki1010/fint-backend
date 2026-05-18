@@ -57,7 +57,7 @@ async function createPreference(req, res) {
           {
             id: `complements-${complements.join("-")}`,
             title,
-            description: `App Base + ${complements.length > 0 ? complements.join(", ") : "sin complementos"}`,
+            description: `Edición estándar + ${complements.length > 0 ? complements.join(", ") : "sin complementos"}`,
             quantity: 1,
             unit_price: totalPrice,
             currency_id: "ARS",
