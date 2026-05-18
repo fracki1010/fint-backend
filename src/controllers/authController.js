@@ -10,6 +10,10 @@ const {
   isProduction,
 } = require("../config/runtime");
 const { sendError, handleServerError } = require("../utils/http");
+const {
+  deriveEnabledFeatures,
+  deriveLimits,
+} = require("../config/complementConfig");
 
 const generateToken = (userId) => {
   const jwtSecret = getRequiredEnv("JWT_SECRET");
@@ -86,6 +90,9 @@ const createUserInternal = async ({
   const tenant = await Tenant.create({
     name: storeName || cleanName,
     plan: "app_base",
+    complements: [],
+    enabledFeatures: deriveEnabledFeatures([]),
+    limits: deriveLimits([]),
     trialEndsAt,
   });
 
