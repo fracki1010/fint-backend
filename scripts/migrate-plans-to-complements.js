@@ -8,6 +8,8 @@
  * Idempotent: skips tenants already on app_base with empty complements.
  */
 
+require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
+
 const mongoose = require("mongoose");
 const Tenant = require("../src/models/tenant.model");
 const {
@@ -18,7 +20,7 @@ const {
 const OLD_PLANS = ["essential", "business", "enterprise"];
 
 async function run() {
-  const uri = process.env.MONGODB_URI || "mongodb://localhost:27017/fint";
+  const uri = process.env.MONGODB_URI || process.env.MONGO_URI || "mongodb://localhost:27017/fint";
 
   console.log("[migrate-plans] Connecting to", uri.replace(/\/\/[^:]+:[^@]+@/, "//***:***@"));
   await mongoose.connect(uri);
