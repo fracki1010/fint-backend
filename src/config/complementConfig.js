@@ -74,6 +74,12 @@ const COMPLEMENTS = {
     price: 50,
     features: ["bank_reconciliation"],
   },
+  whatsapp: {
+    id: "whatsapp",
+    name: "Integración WhatsApp",
+    price: 50,
+    features: ["whatsapp"],
+  },
 };
 
 const APP_BASE = {

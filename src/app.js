@@ -62,7 +62,7 @@ function createApp(options = {}) {
     express.json({ limit: "25mb" }),
     require("./controllers/whatsappController").handleWebhook,
   );
-  app.use("/api/whatsapp", authMiddleware, roleMiddleware.requireRole("admin"), require("./routes/whatsappRoutes"));
+  app.use("/api/whatsapp", authMiddleware, planMiddleware.requireFeature("whatsapp"), roleMiddleware.requireRole("admin"), require("./routes/whatsappRoutes"));
   app.use("/api/purchases", authMiddleware, planMiddleware.requireFeature("supplier_account"), require("./routes/purchaseRoutes"));
   app.use("/api/purchases/:purchaseId/receipts", authMiddleware, planMiddleware.requireFeature("supplier_account"), require("./routes/receiptRoutes"));
   app.use("/api/bill-of-materials", authMiddleware, require("./routes/billOfMaterialRoutes"));
