@@ -99,6 +99,7 @@ function createApp(options = {}) {
   app.use(
     "/api/payment-orders",
     authMiddleware,
+    planMiddleware.requireFeature("supplier_account"),
     require("./routes/paymentOrderRoutes"),
   );
   app.use("/api/cost-centers", authMiddleware, require("./routes/costCenterRoutes"));

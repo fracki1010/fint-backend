@@ -14,6 +14,7 @@ describe("complementConfig", () => {
       expect(APP_BASE.features).toContain("supplier_account");
       expect(APP_BASE.features).toContain("quotes");
       expect(APP_BASE.features).toContain("banking");
+      expect(APP_BASE.features).toContain("financial_center");
       expect(APP_BASE.limits.maxUsers).toBe(1);
       expect(APP_BASE.limits.maxProducts).toBe(200);
       expect(APP_BASE.limits.maxOrdersPerMonth).toBe(500);
@@ -101,6 +102,11 @@ describe("complementConfig", () => {
         expect(typeof comp.price).toBe("number");
         expect(Array.isArray(comp.features)).toBe(true);
       }
+    });
+
+    it("conciliacion provides bank_reconciliation (not banking which is in app base)", () => {
+      expect(COMPLEMENTS.conciliacion.features).toContain("bank_reconciliation");
+      expect(COMPLEMENTS.conciliacion.features).not.toContain("banking");
     });
   });
 });

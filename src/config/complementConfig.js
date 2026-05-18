@@ -72,7 +72,7 @@ const COMPLEMENTS = {
     id: "conciliacion",
     name: "Conciliación Bancaria",
     price: 50,
-    features: ["banking"],
+    features: ["bank_reconciliation"],
   },
 };
 
