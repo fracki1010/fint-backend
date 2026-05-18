@@ -76,7 +76,7 @@ const COMPLEMENTS = {
   },
   whatsapp: {
     id: "whatsapp",
-    name: "Agente de IA por WhatsApp",
+    name: "Asistente por WhatsApp",
     price: 50,
     features: ["whatsapp"],
   },
