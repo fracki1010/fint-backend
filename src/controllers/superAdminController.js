@@ -553,6 +553,35 @@ const getAuditLogs = async (req, res) => {
  * @route   GET /api/superadmin/pricing
  * @access  SuperAdmin only
  */
+const DEFAULT_DESCRIPTIONS = {
+  expansion:
+    "Eliminá los límites de productos y ventas mensuales. Ideal para negocios en crecimiento que necesitan escalar sin restricciones.",
+  team_10:
+    "Agregá hasta 10 usuarios con roles diferenciados (admin, ventas, depósito, contabilidad). Perfecto para equipos en crecimiento.",
+  team_unlimited:
+    "Usuarios ilimitados con roles personalizables. Para empresas grandes con equipos distribuidos.",
+  financiero:
+    "Dashboard visual con KPIs de tesorería, comparación de ventas vs compras y alertas de variaciones anormales.",
+  contabilidad:
+    "Libros IVA automáticos (ventas y compras), exportación para contador y generación de asientos contables.",
+  bom:
+    "Definí productos compuestos por ingredientes. Cálculo automático de costos teóricos y explosión de materiales.",
+  produccion:
+    "Registrá órdenes de producción, consumo automático de stock de ingredientes y trazabilidad de lotes.",
+  api:
+    "Acceso programático completo a tu tenant. Documentación interactiva Swagger e integración con otros sistemas.",
+  reportes:
+    "Reportes personalizables por fecha, producto, vendedor y estado. Exportación a Excel y PDF.",
+  listas_precios:
+    "Hasta 5 listas de precios diferenciadas. Asignación automática por cliente (mayoristas, minoristas, etc.).",
+  centros_costo:
+    "Categorizá gastos por centro de costo, analizá rentabilidad por producto y visualizá distribución de costos.",
+  conciliacion:
+    "Match automático entre movimientos bancarios y registros internos. Importación de extractos bancarios.",
+  whatsapp:
+    "Conectá un número de WhatsApp y dejá que un agente con IA sea tu nuevo asistente personal. El asistente puede consultar stock, precios, tomar pedidos y responder preguntas frecuentes 24/7 sin intervención humana.",
+};
+
 const getPricing = async (req, res) => {
   try {
     const config = await SystemConfig.findOne({ key: "global" }).lean();
@@ -564,6 +593,7 @@ const getPricing = async (req, res) => {
     });
 
     const overrides = config?.complementPricing || {};
+    const descOverrides = config?.complementDescriptions || {};
     const appBasePrice = config?.appBasePrice || APP_BASE.price;
 
     return res.json({
@@ -571,6 +601,10 @@ const getPricing = async (req, res) => {
       appBasePrice,
       defaultPrices,
       overrides,
+      descriptions: Object.keys(COMPLEMENTS).reduce(
+        (acc, id) => ({ ...acc, [id]: descOverrides[id] || DEFAULT_DESCRIPTIONS[id] || "" }),
+        {}
+      ),
       // Computed effective prices
       effectivePrices: {
         appBase: appBasePrice,
@@ -594,7 +628,7 @@ const getPricing = async (req, res) => {
  */
 const updatePricing = async (req, res) => {
   try {
-    const { appBasePrice, complementPricing } = req.body;
+    const { appBasePrice, complementPricing, complementDescriptions } = req.body;
 
     // Validate complement IDs
     if (complementPricing) {
@@ -614,6 +648,7 @@ const updatePricing = async (req, res) => {
         $set: {
           ...(appBasePrice !== undefined && { appBasePrice }),
           ...(complementPricing !== undefined && { complementPricing }),
+          ...(complementDescriptions !== undefined && { complementDescriptions }),
         },
       },
       { upsert: true, new: true }
@@ -622,7 +657,7 @@ const updatePricing = async (req, res) => {
     await AuditLog.create({
       action: "system.pricing_updated",
       admin: req.user._id,
-      details: { appBasePrice, complementPricing },
+      details: { appBasePrice, complementPricing, hasDescriptions: !!complementDescriptions },
       ip: req.ip,
       userAgent: req.headers["user-agent"],
     });

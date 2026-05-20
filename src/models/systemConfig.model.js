@@ -20,6 +20,12 @@ const systemConfigSchema = new mongoose.Schema(
       type: Number,
       default: 8000,
     },
+    // Descripciones editables de complementos
+    complementDescriptions: {
+      type: Map,
+      of: String,
+      default: new Map(),
+    },
   },
   { timestamps: true },
 );
