@@ -660,10 +660,14 @@ exports.importProducts = async (req, res) => {
 
         // Build presentation if present
         if (row.presentacion_nombre?.toString().trim()) {
+          const presCost = parseFloat(row.presentacion_costo) || undefined;
+          const presMarkup = parseFloat(row.presentacion_markup) || undefined;
           const pres = {
             name: row.presentacion_nombre.toString().trim(),
-            price: parseFloat(row.presentacion_precio) || 0,
+            price: (presCost && presMarkup ? presCost * (1 + presMarkup / 100) : parseFloat(row.presentacion_precio)) || 0,
+            cost: presCost || undefined,
             equivalentQty: parseFloat(row.presentacion_unidades) || 1,
+            unitOfMeasure: row.presentacion_unidad_medida?.toString().trim() || payload.unitOfMeasure,
             sku: row.presentacion_sku?.toString().trim().toUpperCase(),
           };
           payload.presentations = [pres];
@@ -715,7 +719,9 @@ exports.importProducts = async (req, res) => {
               // Update existing presentation
               const updatePres = {};
               if (pres.price) updatePres[`presentations.${existingPresIdx}.price`] = pres.price;
+              if (pres.cost !== undefined) updatePres[`presentations.${existingPresIdx}.cost`] = pres.cost;
               if (pres.equivalentQty) updatePres[`presentations.${existingPresIdx}.equivalentQty`] = pres.equivalentQty;
+              if (pres.unitOfMeasure) updatePres[`presentations.${existingPresIdx}.unitOfMeasure`] = pres.unitOfMeasure;
               if (pres.sku) updatePres[`presentations.${existingPresIdx}.sku`] = pres.sku;
               if (Object.keys(updatePres).length > 0) {
                 await Product.updateOne({ _id: existing._id }, { $set: updatePres });
