@@ -19,4 +19,8 @@ router.get("/analytics", superAdminController.getAnalytics);
 // Audit Logs
 router.get("/audit", superAdminController.getAuditLogs);
 
+// Pricing Management
+router.get("/pricing", superAdminController.getPricing);
+router.put("/pricing", superAdminController.updatePricing);
+
 module.exports = router;

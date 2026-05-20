@@ -4,6 +4,7 @@ const Setting = require("../models/setting.model");
 const { Product } = require("../models/product.model");
 const Order = require("../models/order.model");
 const AuditLog = require("../models/auditLog.model");
+const SystemConfig = require("../models/systemConfig.model");
 const { handleServerError } = require("../utils/http");
 const { sendEmail, buildWelcomeEmail } = require("../services/emailService");
 const bcrypt = require("bcryptjs");
@@ -547,6 +548,95 @@ const getAuditLogs = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get current complement pricing
+ * @route   GET /api/superadmin/pricing
+ * @access  SuperAdmin only
+ */
+const getPricing = async (req, res) => {
+  try {
+    const config = await SystemConfig.findOne({ key: "global" }).lean();
+    
+    // Merge default prices from config with any overrides from DB
+    const defaultPrices = {};
+    Object.entries(COMPLEMENTS).forEach(([id, comp]) => {
+      defaultPrices[id] = comp.price;
+    });
+
+    const overrides = config?.complementPricing || {};
+    const appBasePrice = config?.appBasePrice || APP_BASE.price;
+
+    return res.json({
+      success: true,
+      appBasePrice,
+      defaultPrices,
+      overrides,
+      // Computed effective prices
+      effectivePrices: {
+        appBase: appBasePrice,
+        ...Object.fromEntries(
+          Object.keys(COMPLEMENTS).map((id) => [
+            id,
+            overrides[id] !== undefined ? overrides[id] : defaultPrices[id],
+          ])
+        ),
+      },
+    });
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener precios");
+  }
+};
+
+/**
+ * @desc    Update complement pricing
+ * @route   PUT /api/superadmin/pricing
+ * @access  SuperAdmin only
+ */
+const updatePricing = async (req, res) => {
+  try {
+    const { appBasePrice, complementPricing } = req.body;
+
+    // Validate complement IDs
+    if (complementPricing) {
+      for (const compId of Object.keys(complementPricing)) {
+        if (compId !== "appBase" && !COMPLEMENTS[compId]) {
+          return res.status(400).json({
+            success: false,
+            message: `Complemento inválido: ${compId}`,
+          });
+        }
+      }
+    }
+
+    const config = await SystemConfig.findOneAndUpdate(
+      { key: "global" },
+      {
+        $set: {
+          ...(appBasePrice !== undefined && { appBasePrice }),
+          ...(complementPricing !== undefined && { complementPricing }),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await AuditLog.create({
+      action: "system.pricing_updated",
+      admin: req.user._id,
+      details: { appBasePrice, complementPricing },
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    return res.json({
+      success: true,
+      message: "Precios actualizados",
+      pricing: config,
+    });
+  } catch (error) {
+    return handleServerError(res, error, "Error al actualizar precios");
+  }
+};
+
 module.exports = {
   getAllTenants,
   getTenantById,
@@ -555,4 +645,6 @@ module.exports = {
   suspendTenant,
   getAnalytics,
   getAuditLogs,
+  getPricing,
+  updatePricing,
 };
