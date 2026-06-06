@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const Purchase = require("../models/purchase.model");
 const SupplierAccountEntry = require("../models/supplierAccountEntry.model");
+const { Receipt } = require("../models/receipt.model");
 const { receiveStock } = require("../services/costingService");
 const { sendError, handleServerError } = require("../utils/http");
 
