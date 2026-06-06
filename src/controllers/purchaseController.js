@@ -315,14 +315,24 @@ exports.receivePurchase = async (req, res) => {
       if (!purchase) throw new Error("PURCHASE_NOT_FOUND");
       if (purchase.status !== "CONFIRMED") throw new Error("INVALID_STATUS_TRANSITION");
 
+      // Use items from request body if provided (mobile/receive modal),
+      // otherwise receive all items from the purchase
+      const incomingItems = req.body?.items?.length > 0 ? req.body.items : null;
       const receiptItems = [];
+      const itemsToProcess = incomingItems || purchase.items;
 
-      for (const item of purchase.items) {
+      for (const item of itemsToProcess) {
+        const productId = item.product?._id || item.product;
+        const qty = incomingItems ? Number(item.quantity) : Number(item.quantity);
+        const unitCost = incomingItems ? Number(item.unitCost) : Number(item.unitCost);
+
+        if (qty <= 0) continue;
+
         const result = await receiveStock({
           tenantId,
-          productId: item.product,
-          quantity: Number(item.quantity),
-          unitCost: Number(item.unitCost),
+          productId,
+          quantity: qty,
+          unitCost,
           presentationId: item.presentationId,
           purchaseId: purchase._id,
           reason: `Recepción de compra ${purchase._id}`,
@@ -330,22 +340,23 @@ exports.receivePurchase = async (req, res) => {
         });
 
         receiptItems.push({
-          product: item.product,
+          product: productId,
           presentationId: item.presentationId || undefined,
-          quantity: Number(item.quantity),
-          unitCost: Number(item.unitCost),
-          lineTotal: Math.round(Number(item.quantity) * Number(item.unitCost) * 100) / 100,
+          quantity: qty,
+          unitCost,
+          lineTotal: Math.round(qty * unitCost * 100) / 100,
         });
       }
 
       // Create Receipt for this reception
       if (receiptItems.length > 0) {
+        const today = new Date().toISOString().split("T")[0];
         const receipt = await Receipt.create(
           [{
             tenant: tenantId,
             purchase: purchase._id,
-            date: new Date().toISOString().split("T")[0],
-            notes: "Recepción completa (legacy)",
+            date: req.body?.date || today,
+            notes: req.body?.notes || "Recepción de compra",
             items: receiptItems,
             createdBy: req.user?._id,
           }],

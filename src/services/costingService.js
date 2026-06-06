@@ -66,7 +66,6 @@ async function receiveStock({
     : await Product.findOne(filter);
 
   if (!product) throw new Error("PRODUCT_NOT_FOUND");
-  if (product.type === "finished") throw new Error("PRODUCT_TYPE_NOT_PURCHASABLE");
 
   // Determine equivalent quantity (how many base units per purchase unit)
   let equivalentQty = product.purchaseEquivalentQty || 1;
