@@ -331,21 +331,25 @@ exports.getProducts = async (req, res) => {
     const filter = includeInactive
       ? { tenant: tenantId }
       : { tenant: tenantId, isActive: { $ne: false } };
+
     // Support filtering by type (e.g. ?type=raw_material)
     if (req.query.type) {
       filter.type = req.query.type;
     }
 
-    const hasPagination =
-      req.query.page !== undefined || req.query.limit !== undefined;
-
-    if (!hasPagination) {
-      const products = await Product.find(filter).sort({ name: 1 });
-      return res.json(products);
+    // Server-side text search: ?search=termino
+    if (req.query.search && req.query.search.trim()) {
+      const term = req.query.search.trim();
+      filter.$or = [
+        { name: { $regex: term, $options: "i" } },
+        { sku: { $regex: term, $options: "i" } },
+        { barcode: { $regex: term, $options: "i" } },
+        { description: { $regex: term, $options: "i" } },
+      ];
     }
 
     const page = Math.max(Number(req.query.page) || 1, 1);
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
     const skip = (page - 1) * limit;
 
     const [products, total] = await Promise.all([
