@@ -348,6 +348,12 @@ exports.getProducts = async (req, res) => {
       ];
     }
 
+    // If no page/limit params, return ALL products (for form dropdowns)
+    if (req.query.page === undefined && req.query.limit === undefined) {
+      const allProducts = await Product.find(filter).sort({ name: 1 });
+      return res.json(allProducts);
+    }
+
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
     const skip = (page - 1) * limit;
