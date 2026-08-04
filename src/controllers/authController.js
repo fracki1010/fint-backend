@@ -50,6 +50,7 @@ const toAuthResponse = async (user) => {
               maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
             } : undefined,
             enabledFeatures: tenant.enabledFeatures || [],
+            experienceMode: tenant.experienceMode || "simple",
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }
@@ -175,6 +176,7 @@ exports.me = async (req, res) => {
             status: tenant.status,
             limits: tenant.limits,
             enabledFeatures: tenant.enabledFeatures || [],
+            experienceMode: tenant.experienceMode || "simple",
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }

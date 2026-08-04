@@ -49,6 +49,13 @@ const tenantSchema = new mongoose.Schema(
       createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
     
+    // Experience Mode (progressive feature exposure)
+    experienceMode: {
+      type: String,
+      enum: ["simple", "intermediate", "full"],
+      default: "simple",
+    },
+
     // Active complements (e.g. ["expansion", "team_10"])
     complements: [{
       type: String,

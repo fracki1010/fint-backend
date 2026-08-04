@@ -63,6 +63,7 @@ exports.getTenantPlan = async (req, res) => {
         current: tenant.plan || "app_base",
         status: tenant.status,
         complements: tenant.complements || [],
+        experienceMode: tenant.experienceMode || "simple",
         enabledFeatures,
         limits: {
           maxUsers: serializeLimit(limits.maxUsers),

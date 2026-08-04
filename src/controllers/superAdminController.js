@@ -331,7 +331,7 @@ const createTenant = async (req, res) => {
  */
 const updateTenant = async (req, res) => {
   try {
-    const { complements, status, limits, enabledFeatures, billing, metadata } = req.body;
+    const { complements, status, limits, enabledFeatures, billing, metadata, experienceMode } = req.body;
     
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) {
@@ -343,6 +343,18 @@ const updateTenant = async (req, res) => {
 
     const oldComplements = [...(tenant.complements || [])];
     const updates = {};
+
+    // Update experienceMode with validation
+    if (experienceMode !== undefined) {
+      const validModes = ["simple", "intermediate", "full"];
+      if (!validModes.includes(experienceMode)) {
+        return res.status(400).json({
+          success: false,
+          message: `experienceMode inválido. Valores permitidos: ${validModes.join(", ")}`,
+        });
+      }
+      updates.experienceMode = experienceMode;
+    }
 
     // Update complements
     if (complements !== undefined) {
