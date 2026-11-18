@@ -822,6 +822,17 @@ const buildClientSalesDetailsMessage = (clientData, orders = []) => {
   return lines.join("\n");
 };
 
+// A confirmation that was asked this long ago is stale: it must not run when the user finally answers.
+const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+// Plain yes/no replies are read here, not by the model: a misread "sí" would write data.
+const quickConfirmation = (text = "") => {
+  const t = text.toString().trim().toLowerCase().replace(/[.!¡?¿]+$/g, "");
+  if (/^(sí|si|dale|ok|okey|okay|confirmo|confirmá|confirma|correcto|obvio|listo|👍)$/.test(t)) return "CONFIRMAR";
+  if (/^(no|cancelar|cancela|cancelá|olvidalo|olvídalo|no gracias)$/.test(t)) return "CANCELAR";
+  return null;
+};
+
 const WRITE_DENIED_MESSAGE =
   "Tu número solo puede consultar. Para registrar movimientos, escribile al administrador de la empresa.";
 
@@ -1084,6 +1095,11 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     }
 
     // --- REGLA 2: ¿HAY UNA ACCIÓN PENDIENTE DE COMPLETAR? ---
+    if (client.pendingAction && client.updatedAt && Date.now() - new Date(client.updatedAt).getTime() > PENDING_ACTION_TTL_MS) {
+      client.pendingAction = null;
+      await client.save();
+    }
+
     if (client.pendingAction?.intent === "CREAR_CLIENTE_WIZARD") {
       if (isCancelMessage(messageBody)) {
         client.pendingAction = null;
@@ -1390,8 +1406,10 @@ Si no hay cambios, omite "product".`;
             ¿Está confirmando o cancelando?
             Responde ÚNICAMENTE con JSON: { "action": "CONFIRMAR" } o { "action": "CANCELAR" } o { "action": "INDECISO" }`;
 
-      const confStr = await processText(confirmPrompt);
-      const confData = safeJsonParse(confStr) || { action: "INDECISO" };
+      const quick = quickConfirmation(messageBody);
+      const confData = quick
+        ? { action: quick }
+        : safeJsonParse(await processText(confirmPrompt)) || { action: "INDECISO" };
 
       if (confData.action === "CANCELAR") {
         client.pendingAction = null;
@@ -2599,4 +2617,4 @@ Si no hay cambios, omite "product".`;
   }
 };
 
-module.exports = { handleIncomingMessage, buildRouterPrompt, safeJsonParse };
+module.exports = { handleIncomingMessage, buildRouterPrompt, safeJsonParse, quickConfirmation };
