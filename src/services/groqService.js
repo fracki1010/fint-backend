@@ -14,7 +14,8 @@ const processText = async (
         { role: "system", content: systemMessage },
         { role: "user", content: prompt },
       ],
-      model: "llama-3.3-70b-versatile",
+      // Llama 3.3 is no longer served to our key; qwen scored best on scripts/eval/router-cases.js.
+      model: process.env.GROQ_CHAT_MODEL || "qwen/qwen3.8-27b",
       temperature: 0.5,
     });
     return chatCompletion.choices[0]?.message?.content || "";

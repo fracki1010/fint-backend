@@ -825,6 +825,31 @@ const buildClientSalesDetailsMessage = (clientData, orders = []) => {
 const WRITE_DENIED_MESSAGE =
   "Tu número solo puede consultar. Para registrar movimientos, escribile al administrador de la empresa.";
 
+// Router prompt for the operational assistant. Exported so the classification can be evaluated alone.
+const buildRouterPrompt = (conversationContext) => `
+            Eres el asistente virtual operativo de una empresa en Fint Guard.
+            Debes ser claro, breve y práctico. Siempre con enfoque en control de stock, ventas y clientes.
+            Contexto de conversación reciente (últimos 5 días):
+            ${conversationContext}
+            Analiza el mensaje y devuelve ÚNICAMENTE JSON:
+            1. Crear producto (siempre completo): { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0, "unitOfMeasure": "unidad|caja|kg|litro|...", "costPrice": 0, "category": "...", "description": "...", "minStock": 0 } }
+            2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "address": "...", "email": "..." } }
+            3. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
+            4. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
+            5. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
+            6. Consultar stock: { "intent": "CONSULTAR_STOCK", "product": { "name": "..." } }
+            7. Reporte bajo stock: { "intent": "REPORTE_BAJO_STOCK" }
+            8. Listar productos: { "intent": "LISTAR_PRODUCTOS", "filters": { "lowStockOnly": false, "limit": 10 } }
+            9. Listar clientes: { "intent": "LISTAR_CLIENTES", "filters": { "top": 10 } }
+            10. Resumen ventas: { "intent": "RESUMEN_VENTAS", "period": "hoy|semana|mes" }
+            11. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
+            12. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
+            13. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
+            14. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
+            15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
+            16. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
+            `;
+
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
     const owner = options.tenantId ? null : await getWhatsAppOwnerId();
@@ -1391,31 +1416,7 @@ Si no hay cambios, omite "product".`;
 
       // REGLA 3: Router operativo para asistente-gestor.
       const conversationContext = getConversationContext(client);
-      const routerPrompt = `
-            Eres el asistente virtual operativo de una empresa en Fint Guard.
-            Debes ser claro, breve y práctico. Siempre con enfoque en control de stock, ventas y clientes.
-            Contexto de conversación reciente (últimos 5 días):
-            ${conversationContext}
-            Analiza el mensaje y devuelve ÚNICAMENTE JSON:
-            1. Crear producto (siempre completo): { "intent": "CREAR_PRODUCTO", "product": { "name": "...", "price": 0, "stock": 0, "unitOfMeasure": "unidad|caja|kg|litro|...", "costPrice": 0, "category": "...", "description": "...", "minStock": 0 } }
-            2. Crear cliente: { "intent": "CREAR_CLIENTE", "client": { "name": "...", "phone": "...", "address": "...", "email": "..." } }
-            3. Nuevo pedido (siempre requiere cliente): { "intent": "NUEVO_PEDIDO", "order": { "clientName": "...", "items": [{ "product": "...", "quantity": 1 }] } }
-            4. Entrada de stock: { "intent": "ENTRADA_STOCK", "product": { "name": "...", "quantity": 0, "reason": "compra a proveedor" } }
-            5. Merma / Pérdida: { "intent": "MERMA_STOCK", "product": { "name": "...", "quantity": 1, "reason": "se pudrió o rompió" } }
-            6. Consultar stock: { "intent": "CONSULTAR_STOCK", "product": { "name": "..." } }
-            7. Reporte bajo stock: { "intent": "REPORTE_BAJO_STOCK" }
-            8. Listar productos: { "intent": "LISTAR_PRODUCTOS", "filters": { "lowStockOnly": false, "limit": 10 } }
-            9. Listar clientes: { "intent": "LISTAR_CLIENTES", "filters": { "top": 10 } }
-            10. Resumen ventas: { "intent": "RESUMEN_VENTAS", "period": "hoy|semana|mes" }
-            11. Métricas negocio: { "intent": "METRICAS_NEGOCIO", "period": "mes" }
-            12. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
-            13. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
-            14. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
-            15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
-            16. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
-            `;
-
-      const jsonString = await processText(messageBody, routerPrompt);
+      const jsonString = await processText(messageBody, buildRouterPrompt(conversationContext));
       var classification = safeJsonParse(jsonString) || {
         intent: "CHARLA_GENERAL",
         message:
@@ -2598,4 +2599,4 @@ Si no hay cambios, omite "product".`;
   }
 };
 
-module.exports = { handleIncomingMessage };
+module.exports = { handleIncomingMessage, buildRouterPrompt, safeJsonParse };
