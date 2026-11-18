@@ -28,3 +28,26 @@ describe("tenantFeatures", () => {
     expect(COMPLEMENTS.team_10).toBeDefined();
   });
 });
+
+const { tenantLimits } = require("../../../src/config/complementConfig");
+
+describe("tenantLimits", () => {
+  it("uses the base limits without complements", () => {
+    expect(tenantLimits({ complements: [] })).toEqual(expect.objectContaining({ maxUsers: 1, maxProducts: 200, maxOrdersPerMonth: 500 }));
+  });
+
+  it("raises the limits of an active complement", () => {
+    expect(tenantLimits({ complements: ["team_10"] }).maxUsers).toBe(10);
+  });
+
+  it("applies a superadmin override on top of the complements", () => {
+    const limits = tenantLimits({ complements: ["team_10"], limitOverrides: { maxUsers: 3, maxProducts: null } });
+    expect(limits.maxUsers).toBe(3);
+    expect(limits.maxProducts).toBe(200);
+  });
+
+  it("ignores a stored limits field, which can drift", () => {
+    const limits = tenantLimits({ complements: [], limits: { maxUsers: 99, maxProducts: 99, maxOrdersPerMonth: 99 } });
+    expect(limits.maxUsers).toBe(1);
+  });
+});

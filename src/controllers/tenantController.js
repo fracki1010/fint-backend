@@ -10,6 +10,7 @@ const {
   deriveLimits,
   computeTotalPrice,
   tenantFeatures,
+  tenantLimits,
 } = require("../config/complementConfig");
 
 const serializeLimit = (value) => (value === Infinity ? -1 : value);
@@ -38,7 +39,7 @@ exports.getTenantPlan = async (req, res) => {
       },
     });
 
-    const limits = deriveLimits(tenant.complements);
+    const limits = tenantLimits(tenant);
     const enabledFeatures = deriveEnabledFeatures(tenant.complements);
 
     const usagePercentages = {
@@ -115,9 +116,9 @@ exports.activateComplements = async (req, res) => {
         current: tenant.plan,
         complements: tenant.complements,
         limits: {
-          maxUsers: serializeLimit(tenant.limits.maxUsers),
-          maxProducts: serializeLimit(tenant.limits.maxProducts),
-          maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
+          maxUsers: serializeLimit(tenantLimits(tenant).maxUsers),
+          maxProducts: serializeLimit(tenantLimits(tenant).maxProducts),
+          maxOrdersPerMonth: serializeLimit(tenantLimits(tenant).maxOrdersPerMonth),
         },
         enabledFeatures: tenantFeatures(tenant),
         totalPrice,

@@ -1,12 +1,12 @@
 const { sendError } = require("../utils/http");
 const Tenant = require("../models/tenant.model");
-const { tenantFeatures } = require("../config/complementConfig");
+const { tenantFeatures, tenantLimits } = require("../config/complementConfig");
 
 function requireFeature(feature) {
   return async (req, res, next) => {
     try {
       const tenant = await Tenant.findById(req.user.tenant)
-        .select("complements limits usage")
+        .select("complements limitOverrides usage")
         .lean();
 
       if (!tenant) {
@@ -38,7 +38,7 @@ function checkLimit(limitKey) {
   return async (req, res, next) => {
     try {
       const tenant = await Tenant.findById(req.user.tenant)
-        .select("usage limits")
+        .select("complements limitOverrides usage")
         .lean();
 
       if (!tenant) {
@@ -49,7 +49,7 @@ function checkLimit(limitKey) {
         });
       }
 
-      const max = tenant.limits?.[limitKey];
+      const max = tenantLimits(tenant)[limitKey];
       if (max === undefined || max <= 0) return next(); // 0 or -1 = unlimited
 
       const current = tenant.usage?.[limitKey] ?? 0;
