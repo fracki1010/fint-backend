@@ -13,6 +13,7 @@ const {
 const voucherService = require("../services/voucherService");
 const cashClosingService = require("../services/cashClosingService");
 const { HttpError, sendError, handleServerError } = require("../utils/http");
+const { findUncoveredItem } = require("../utils/stockDemand");
 
 // Valid price tier values
 const VALID_PRICE_TIERS = ["retail", "wholesale", "distributor"];
@@ -500,6 +501,43 @@ exports.getOrderById = async (req, res) => {
 };
 
 // Crear una nueva orden
+// Orders that have not taken stock yet still promise it to the client, so a new
+// order must fit in what is left after them. Without this, a deduction on delivery
+// only fails at delivery time, long after the sale was accepted.
+const assertStockCoversPendingOrders = async (order, session, tenantId) => {
+  const pendingOrders = await Order.find({
+    tenant: tenantId,
+    stockApplied: { $ne: true },
+    salesStatus: { $ne: "Cancelada" },
+    deliveryStatus: { $ne: "Entregada" },
+  })
+    .select("items")
+    .session(session)
+    .lean();
+
+  const productIds = new Set();
+  for (const o of [order, ...pendingOrders]) {
+    for (const item of o.items || []) {
+      if (item.productId) productIds.add(String(item.productId));
+    }
+  }
+  if (productIds.size === 0) return;
+
+  const products = await Product.find({ _id: { $in: [...productIds] }, tenant: tenantId })
+    .session(session)
+    .lean();
+  const productsById = new Map(products.map((p) => [String(p._id), p]));
+
+  const uncovered = findUncoveredItem({ requestedOrder: order, pendingOrders, productsById });
+  if (uncovered) {
+    throw new HttpError(
+      409,
+      "INSUFFICIENT_STOCK",
+      `Stock insuficiente para ${uncovered.product.name}: disponible ${uncovered.available}, pedido ${uncovered.requested}`,
+    );
+  }
+};
+
 exports.createOrder = async (req, res) => {
   const session = await mongoose.startSession();
   let sessionClosed = false;
@@ -619,6 +657,10 @@ exports.createOrder = async (req, res) => {
           "El monto de la orden excede el límite de crédito del cliente",
         );
       }
+    }
+
+    if (!shouldApplyStockOnCreate && newOrder.salesStatus !== "Cancelada") {
+      await assertStockCoversPendingOrders(newOrder, session, tenantId);
     }
 
     if (shouldApplyStockOnCreate) {
