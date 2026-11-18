@@ -794,6 +794,15 @@ exports.updateOrder = async (req, res) => {
     if (req.body.paymentMethod !== undefined) order.paymentMethod = req.body.paymentMethod;
     if (req.body.paymentSplits !== undefined) order.paymentSplits = req.body.paymentSplits;
 
+    // A cancelled sale cannot be charged or delivered: the states would contradict each other.
+    if (order.salesStatus === "Cancelada" && (order.paymentStatus === "Pagado" || order.deliveryStatus === "Entregada")) {
+      throw new HttpError(
+        400,
+        "CANCELLED_ORDER_HAS_PAYMENT_OR_DELIVERY",
+        "Una venta cancelada no puede estar cobrada ni entregada",
+      );
+    }
+
     if (
       order.deliveryStatus === "Entregada" &&
       !orderSettings.allowDeliveryWithoutPayment &&
