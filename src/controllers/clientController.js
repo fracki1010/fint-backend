@@ -137,13 +137,6 @@ exports.createClient = async (req, res) => {
     const phone = normalizePhone(req.body.phone);
     const taxId = normalizeText(req.body.taxId);
 
-    if (!taxId) {
-      return sendError(res, {
-        status: 400,
-        code: "CLIENT_TAX_ID_REQUIRED",
-        message: "El documento fiscal del cliente es obligatorio",
-      });
-    }
 
     const existingClient = await Client.findOne({ tenant: tenantId, phone });
     if (existingClient) {
