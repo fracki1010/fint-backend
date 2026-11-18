@@ -168,7 +168,7 @@ exports.createStockMovement = async (req, res) => {
     }
 
     session.startTransaction();
-    const { product, type, quantity, reason, order, source, presentationName, presentationId, presentationEquivalentQty, presentationUnitCost } = req.body;
+    const { product, type, quantity, reason, order, source, presentationName, presentationId, presentationEquivalentQty, presentationUnitCost, expectedStock } = req.body;
 
     // Obtener el producto para calcular stockBefore y stockAfter
     const prod = await Product.findOne({
@@ -188,6 +188,18 @@ exports.createStockMovement = async (req, res) => {
     }
 
     const stockBefore = prod.stock;
+
+    // Optional guard: the client states the stock its count was based on.
+    if (expectedStock !== undefined && expectedStock !== stockBefore) {
+      await session.abortTransaction();
+      session.endSession();
+      sessionClosed = true;
+      return sendError(res, {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: "El stock cambió mientras contabas. Revisá el número y volvé a guardar.",
+      });
+    }
     let stockAfter;
 
     if (type === "ENTRADA" || type === "AJUSTE") {

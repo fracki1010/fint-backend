@@ -195,6 +195,7 @@ const stockMovementBody = z.object({
   reason: z.string().trim().optional(),
   order: objectId.optional(),
   source: z.enum(["WhatsApp", "Dashboard", "Sistema"]).optional(),
+  expectedStock: z.coerce.number().min(0).optional(),
 });
 
 const stockQuerySchema = paginationQuery.extend({
