@@ -13,6 +13,7 @@ const { sendError, handleServerError } = require("../utils/http");
 const {
   deriveEnabledFeatures,
   deriveLimits,
+  tenantFeatures,
 } = require("../config/complementConfig");
 
 const generateToken = (userId) => {
@@ -49,8 +50,7 @@ const toAuthResponse = async (user) => {
               maxProducts: serializeLimit(tenant.limits.maxProducts),
               maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
             } : undefined,
-            enabledFeatures: tenant.enabledFeatures || [],
-            experienceMode: tenant.experienceMode || "simple",
+            enabledFeatures: tenantFeatures(tenant),
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }
@@ -175,8 +175,7 @@ exports.me = async (req, res) => {
             plan: tenant.plan,
             status: tenant.status,
             limits: tenant.limits,
-            enabledFeatures: tenant.enabledFeatures || [],
-            experienceMode: tenant.experienceMode || "simple",
+            enabledFeatures: tenantFeatures(tenant),
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
           }

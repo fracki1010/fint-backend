@@ -31,11 +31,11 @@ const mockRes = () => {
 };
 
 describe("requireFeature", () => {
-  it("allows access when enabledFeatures contains the required feature", async () => {
+  it("allows access when an active complement grants the required feature", async () => {
     const tenant = await Tenant.create({
       name: "Test Tenant",
       plan: "app_base",
-      enabledFeatures: ["team_management"],
+      complements: ["team_10"],
     });
 
     const req = { user: { tenant: tenant._id } };
@@ -49,11 +49,11 @@ describe("requireFeature", () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it("blocks access when enabledFeatures does not contain the required feature", async () => {
+  it("blocks access when no active complement grants the required feature", async () => {
     const tenant = await Tenant.create({
       name: "Test Tenant",
       plan: "app_base",
-      enabledFeatures: ["client_account"],
+      complements: [],
     });
 
     const req = { user: { tenant: tenant._id } };
@@ -73,24 +73,24 @@ describe("requireFeature", () => {
     );
   });
 
-  it("blocks access when enabledFeatures is empty", async () => {
+  it("blocks access when the tenant has no complements", async () => {
     const tenant = await Tenant.create({
       name: "Test Tenant",
       plan: "app_base",
-      enabledFeatures: [],
+      complements: [],
     });
 
     const req = { user: { tenant: tenant._id } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requireFeature("quotes")(req, res, next);
+    await requireFeature("team_management")(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it("blocks access when enabledFeatures is undefined", async () => {
+  it("blocks access when the tenant has no complements field", async () => {
     const tenant = await Tenant.create({
       name: "Test Tenant",
       plan: "app_base",
@@ -100,7 +100,7 @@ describe("requireFeature", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    await requireFeature("quotes")(req, res, next);
+    await requireFeature("team_management")(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
@@ -129,7 +129,7 @@ describe("requireFeature", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    await requireFeature("quotes")(req, res, next);
+    await requireFeature("team_management")(req, res, next);
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(next.mock.calls[0][0]).toBeInstanceOf(Error);

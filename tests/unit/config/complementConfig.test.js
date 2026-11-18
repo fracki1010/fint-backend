@@ -14,7 +14,8 @@ describe("complementConfig", () => {
       expect(APP_BASE.features).toContain("supplier_account");
       expect(APP_BASE.features).toContain("quotes");
       expect(APP_BASE.features).toContain("banking");
-      expect(APP_BASE.features).toContain("financial_center");
+      expect(APP_BASE.features).toContain("cash_management");
+      expect(APP_BASE.features).not.toContain("financial_center");
       expect(APP_BASE.limits.maxUsers).toBe(1);
       expect(APP_BASE.limits.maxProducts).toBe(200);
       expect(APP_BASE.limits.maxOrdersPerMonth).toBe(500);
