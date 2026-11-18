@@ -97,8 +97,8 @@ function createApp(options = {}) {
   // Webhook de pagos no requiere auth (viene de MercadoPago) — debe ir antes del app.use de /api/payments
   app.post("/api/payments/webhook", express.json(), require("./controllers/paymentController").webhook);
   app.use("/api/payments", authMiddleware, require("./routes/paymentRoutes"));
-  app.use("/api/cash-closing", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashClosingRoutes"));
-  app.use("/api/cash-movements", authMiddleware, planMiddleware.requireFeature("financial_center"), require("./routes/cashMovementRoutes"));
+  app.use("/api/cash-closing", authMiddleware, planMiddleware.requireFeature("cash_management"), require("./routes/cashClosingRoutes"));
+  app.use("/api/cash-movements", authMiddleware, planMiddleware.requireFeature("cash_management"), require("./routes/cashMovementRoutes"));
   app.use("/api/quotes", authMiddleware, planMiddleware.requireFeature("quotes"), require("./routes/quoteRoutes"));
   app.use("/api/banking", authMiddleware, require("./routes/bankingRoutes"));
   app.use(
@@ -107,7 +107,7 @@ function createApp(options = {}) {
     planMiddleware.requireFeature("supplier_account"),
     require("./routes/paymentOrderRoutes"),
   );
-  app.use("/api/cost-centers", authMiddleware, require("./routes/costCenterRoutes"));
+  app.use("/api/cost-centers", authMiddleware, planMiddleware.requireFeature("cost_centers"), require("./routes/costCenterRoutes"));
   app.use(
     "/api/treasury",
     authMiddleware,
