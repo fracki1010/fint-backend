@@ -833,6 +833,9 @@ const quickConfirmation = (text = "") => {
   return null;
 };
 
+// Intents that create or change data. Only the admin number may trigger them.
+const WRITE_INTENTS = new Set(["CREAR_CLIENTE", "CREAR_PRODUCTO", "NUEVO_PEDIDO", "ENTRADA_STOCK", "MERMA_STOCK"]);
+
 const WRITE_DENIED_MESSAGE =
   "Tu número solo puede consultar. Para registrar movimientos, escribile al administrador de la empresa.";
 
@@ -871,6 +874,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     if (!client) {
       client = await Client.create({ tenant: tenantId, phone, name: "Admin Fint Guard" });
     }
+    const lastSavedAt = client.updatedAt;
 
     client.conversationHistory = pruneConversationHistory(client);
     appendConversationEntry(client, "user", messageBody);
@@ -912,6 +916,10 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
           product: { ...pendingProduct, name: selectedName },
         };
         await client.save();
+
+        if (!isAdmin && WRITE_INTENTS.has(classification.intent)) {
+          return WRITE_DENIED_MESSAGE;
+        }
 
         if (classification.intent === "CONSULTAR_STOCK") {
           const { product: productoDB } = await findProductByName(
@@ -1095,7 +1103,7 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     }
 
     // --- REGLA 2: ¿HAY UNA ACCIÓN PENDIENTE DE COMPLETAR? ---
-    if (client.pendingAction && client.updatedAt && Date.now() - new Date(client.updatedAt).getTime() > PENDING_ACTION_TTL_MS) {
+    if (client.pendingAction && lastSavedAt && Date.now() - new Date(lastSavedAt).getTime() > PENDING_ACTION_TTL_MS) {
       client.pendingAction = null;
       await client.save();
     }
@@ -1431,6 +1439,13 @@ Si no hay cambios, omite "product".`;
       await client.save();
     } else {
       // --- SI NO HAY ACCIÓN PENDIENTE, CLASIFICAMOS EL MENSAJE ---
+      if (quickConfirmation(messageBody)) {
+        const msg = "No tengo ninguna operación pendiente de confirmar. Decime qué querés hacer.";
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+
 
       // REGLA 3: Router operativo para asistente-gestor.
       const conversationContext = getConversationContext(client);
@@ -1440,6 +1455,10 @@ Si no hay cambios, omite "product".`;
         message:
           "No pude clasificar con certeza. Pídeme algo puntual de stock, ventas o clientes.",
       };
+
+      if (!isAdmin && WRITE_INTENTS.has(classification.intent)) {
+        return WRITE_DENIED_MESSAGE;
+      }
 
       // --- FASE DE CONFIRMACIÓN ---
       // Si detectamos que quiere crear algo, lo guardamos en 'pendingAction' y detenemos la ejecución
