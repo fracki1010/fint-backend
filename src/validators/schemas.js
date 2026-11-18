@@ -41,6 +41,11 @@ const createUserBody = z.object({
 
 const idParam = z.object({ id: objectId });
 
+const clientOrdersQuery = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 const clientPayloadBase = {
   name: z.string().trim().min(1, "Nombre requerido").optional(),
   phone: z.string().trim().min(3, "Teléfono requerido").optional(),
@@ -589,6 +594,7 @@ module.exports = {
   createClientBody,
   updateClientBody,
   includeInactiveQuery,
+  clientOrdersQuery,
   createProductBody,
   updateProductBody,
   createOrderBody,

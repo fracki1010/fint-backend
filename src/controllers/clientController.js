@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Client = require("../models/client.model");
 const Order = require("../models/order.model");
 const {
@@ -26,6 +27,39 @@ const buildClientMetrics = (orders) => {
     pendingOrders,
     deliveredOrders,
     lastOrderAt: orders[0]?.createdAt || null,
+  };
+};
+
+// Metrics over every order of the client, not just the ones returned in the list.
+const getClientMetrics = async (tenantId, clientId) => {
+  const [agg] = await Order.aggregate([
+    { $match: { tenant: new mongoose.Types.ObjectId(tenantId), client: clientId } },
+    {
+      $group: {
+        _id: null,
+        totalOrders: { $sum: 1 },
+        totalSpent: { $sum: { $ifNull: ["$totalAmount", 0] } },
+        pendingOrders: {
+          $sum: {
+            $cond: [
+              { $and: [{ $ne: ["$salesStatus", "Cancelada"] }, { $ne: ["$deliveryStatus", "Entregada"] }] },
+              1,
+              0,
+            ],
+          },
+        },
+        deliveredOrders: { $sum: { $cond: [{ $eq: ["$deliveryStatus", "Entregada"] }, 1, 0] } },
+        lastOrderAt: { $max: "$createdAt" },
+      },
+    },
+  ]);
+
+  return {
+    totalOrders: agg?.totalOrders || 0,
+    totalSpent: agg?.totalSpent || 0,
+    pendingOrders: agg?.pendingOrders || 0,
+    deliveredOrders: agg?.deliveredOrders || 0,
+    lastOrderAt: agg?.lastOrderAt || null,
   };
 };
 
@@ -123,7 +157,7 @@ exports.getClientById = async (req, res) => {
     return res.json({
       client,
       orders,
-      metrics: buildClientMetrics(orders),
+      metrics: await getClientMetrics(tenantId, client._id),
     });
   } catch (error) {
     return handleServerError(res, error, "Error al obtener el cliente");
@@ -279,5 +313,31 @@ exports.deleteClient = async (req, res) => {
     res.json({ message: "Cliente desactivado correctamente" });
   } catch (error) {
     return handleServerError(res, error, "Error al eliminar el cliente");
+  }
+};
+
+// Paginated orders of one client, newest first.
+exports.getClientOrders = async (req, res) => {
+  try {
+    const tenantId = req.user?.tenant;
+    const clientId = req.params.id;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const filter = { tenant: tenantId, client: clientId };
+
+    const [orders, total] = await Promise.all([
+      Order.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Order.countDocuments(filter),
+    ]);
+
+    return res.json({
+      orders,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(Math.ceil(total / limit), 1),
+    });
+  } catch (error) {
+    return handleServerError(res, error, "Error al obtener las ventas del cliente");
   }
 };

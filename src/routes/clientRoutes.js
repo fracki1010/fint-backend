@@ -8,6 +8,7 @@ const {
   createClientBody,
   updateClientBody,
   includeInactiveQuery,
+  clientOrdersQuery,
 } = require("../validators/schemas");
 
 router.get("/generic", clientController.getOrCreateGenericClient);
@@ -24,6 +25,12 @@ router.put(
   clientController.updateClient,
 );
 router.delete("/:id", validateRequest({ params: idParam }), clientController.deleteClient);
+
+router.get(
+  "/:id/orders",
+  validateRequest({ params: idParam, query: clientOrdersQuery }),
+  clientController.getClientOrders,
+);
 
 // ── Client Account ─────────────────────────────────────────────────────
 router.get("/:id/account", validateRequest({ params: idParam }), clientAccountController.getClientAccount);
