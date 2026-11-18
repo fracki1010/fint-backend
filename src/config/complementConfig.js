@@ -147,10 +147,15 @@ function computeTotalPrice(complements = []) {
   return total;
 }
 
+// Features a tenant has, derived from the base and its complements. The stored
+// enabledFeatures field is not used for access, so it cannot drift from the plan.
+const tenantFeatures = (tenant) => deriveEnabledFeatures(tenant?.complements || []);
+
 module.exports = {
   COMPLEMENTS,
   APP_BASE,
   deriveEnabledFeatures,
+  tenantFeatures,
   deriveLimits,
   computeTotalPrice,
 };

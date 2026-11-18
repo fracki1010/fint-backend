@@ -9,6 +9,7 @@ const {
   deriveEnabledFeatures,
   deriveLimits,
   computeTotalPrice,
+  tenantFeatures,
 } = require("../config/complementConfig");
 
 const serializeLimit = (value) => (value === Infinity ? -1 : value);
@@ -118,7 +119,7 @@ exports.activateComplements = async (req, res) => {
           maxProducts: serializeLimit(tenant.limits.maxProducts),
           maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
         },
-        enabledFeatures: tenant.enabledFeatures,
+        enabledFeatures: tenantFeatures(tenant),
         totalPrice,
       },
     });

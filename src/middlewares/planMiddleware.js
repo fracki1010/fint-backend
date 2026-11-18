@@ -1,11 +1,12 @@
 const { sendError } = require("../utils/http");
 const Tenant = require("../models/tenant.model");
+const { tenantFeatures } = require("../config/complementConfig");
 
 function requireFeature(feature) {
   return async (req, res, next) => {
     try {
       const tenant = await Tenant.findById(req.user.tenant)
-        .select("enabledFeatures limits usage")
+        .select("complements limits usage")
         .lean();
 
       if (!tenant) {
@@ -16,7 +17,7 @@ function requireFeature(feature) {
         });
       }
 
-      const features = tenant.enabledFeatures || [];
+      const features = tenantFeatures(tenant);
 
       if (!features.includes(feature)) {
         return sendError(res, {
