@@ -331,7 +331,7 @@ const createTenant = async (req, res) => {
  */
 const updateTenant = async (req, res) => {
   try {
-    const { complements, status, limits, enabledFeatures, billing, metadata } = req.body;
+    const { complements, status, limits, billing, metadata } = req.body;
     
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) {
@@ -366,9 +366,7 @@ const updateTenant = async (req, res) => {
     // Update custom limits (override complement defaults)
     if (limits) updates.limits = { ...tenant.limits, ...limits };
     
-    // Update features
-    if (enabledFeatures) updates.enabledFeatures = enabledFeatures;
-    
+
     // Update billing
     if (billing) updates.billing = { ...tenant.billing, ...billing };
     
