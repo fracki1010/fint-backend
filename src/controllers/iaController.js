@@ -822,10 +822,15 @@ const buildClientSalesDetailsMessage = (clientData, orders = []) => {
   return lines.join("\n");
 };
 
+const WRITE_DENIED_MESSAGE =
+  "Tu número solo puede consultar. Para registrar movimientos, escribile al administrador de la empresa.";
+
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
   try {
     const owner = options.tenantId ? null : await getWhatsAppOwnerId();
     const tenantId = options.tenantId || owner?.tenantId;
+    // Owner path (no tenant option) is the business owner; a tenant sender must be the admin number to write.
+    const isAdmin = options.tenantId ? options.isAdmin === true : true;
     let client = await Client.findOne({ tenant: tenantId, phone });
     if (!client) {
       client = await Client.create({ tenant: tenantId, phone, name: "Admin Fint Guard" });
@@ -1594,6 +1599,7 @@ Si no hay cambios, omite "product".`;
     // --- EJECUCIÓN (Solo llega aquí si se acaba de confirmar o si es una charla/consulta) ---
     switch (classification.intent) {
       case "CREAR_CLIENTE": {
+      if (!isAdmin) return WRITE_DENIED_MESSAGE;
         const validation = validateClientDraft(classification.client || {});
         if (validation.missing.length > 0 || validation.invalid.length > 0) {
           const msg = `❌ No puedo crear el cliente.\n${
@@ -1661,6 +1667,7 @@ Si no hay cambios, omite "product".`;
       }
 
       case "CREAR_PRODUCTO": {
+      if (!isAdmin) return WRITE_DENIED_MESSAGE;
         const validation = validateProductDraft(classification.product || {});
         if (validation.missing.length > 0 || validation.invalid.length > 0) {
           const msg = `❌ No puedo crear el producto.\n${
@@ -1808,6 +1815,7 @@ Si no hay cambios, omite "product".`;
       }
 
       case "NUEVO_PEDIDO": {
+      if (!isAdmin) return WRITE_DENIED_MESSAGE;
         const draft =
           classification.orderDraft ||
           (await (async () => {
@@ -1975,6 +1983,7 @@ Si no hay cambios, omite "product".`;
       }
 
       case "ENTRADA_STOCK": {
+      if (!isAdmin) return WRITE_DENIED_MESSAGE;
         const { name, quantity, reason } = classification.product || {};
         const qty = toPositiveNumber(quantity);
         if (!qty) {
@@ -2057,6 +2066,7 @@ Si no hay cambios, omite "product".`;
       }
 
       case "MERMA_STOCK": {
+      if (!isAdmin) return WRITE_DENIED_MESSAGE;
         const { name, quantity, reason } = classification.product || {};
         const qty = toPositiveNumber(quantity);
         if (!qty) {

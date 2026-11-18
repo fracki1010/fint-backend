@@ -57,7 +57,10 @@ exports.restart = async (_req, res) => {
 
 // Llamado por el worker cuando llega un mensaje de WhatsApp
 exports.handleWebhook = async (req, res) => {
-  if (WORKER_INTERNAL_SECRET && req.headers.authorization !== `Bearer ${WORKER_INTERNAL_SECRET}`) {
+  if (!WORKER_INTERNAL_SECRET) {
+    return res.status(503).json({ error: "Webhook de WhatsApp no configurado" });
+  }
+  if (req.headers.authorization !== `Bearer ${WORKER_INTERNAL_SECRET}`) {
     return res.status(401).json({ error: "No autorizado" });
   }
 
@@ -113,6 +116,7 @@ exports.handleWebhook = async (req, res) => {
 
     const iaResponse = await handleIncomingMessage(from, messageText, {
       tenantId: senderAccess.tenantId,
+      isAdmin: senderAccess.isAdmin === true,
       sendInvoicePdf: async ({ pdfPath, caption }) => {
         try {
           const pdfBase64 = fs.readFileSync(pdfPath).toString("base64");

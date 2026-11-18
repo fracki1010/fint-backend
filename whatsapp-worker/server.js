@@ -9,8 +9,13 @@ app.use(express.json({ limit: "25mb" }));
 const WORKER_PORT = process.env.WORKER_PORT || 3001;
 const WORKER_INTERNAL_SECRET = process.env.WORKER_INTERNAL_SECRET || "";
 
+// Without a secret every endpoint below would be open: refuse to start instead.
+if (!WORKER_INTERNAL_SECRET) {
+  console.error("WORKER_INTERNAL_SECRET no está configurado: el worker no arranca.");
+  process.exit(1);
+}
+
 const requireSecret = (req, res, next) => {
-  if (!WORKER_INTERNAL_SECRET) return next();
   const auth = req.headers.authorization;
   if (auth !== `Bearer ${WORKER_INTERNAL_SECRET}`) {
     return res.status(401).json({ error: "No autorizado" });

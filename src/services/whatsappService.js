@@ -36,7 +36,8 @@ const resolveTenantBySender = async (senderId) => {
     return { senderNumber, access: "feature_disabled", tenantId: null };
   }
 
-  return { senderNumber, access: "allowed", tenantId: matches[0].tenant };
+  const isAdmin = normalizeWhatsAppNumber(matches[0].whatsappAdminNumber) === senderNumber;
+  return { senderNumber, access: "allowed", tenantId: matches[0].tenant, isAdmin };
 };
 
 const workerRequest = async (method, path, body = null) => {
