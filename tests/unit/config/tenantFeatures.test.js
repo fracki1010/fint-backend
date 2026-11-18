@@ -51,3 +51,13 @@ describe("tenantLimits", () => {
     expect(limits.maxUsers).toBe(1);
   });
 });
+
+describe("whatsapp complement", () => {
+  it("is not part of the base plan", () => {
+    expect(tenantFeatures({ complements: [] })).not.toContain("whatsapp");
+  });
+
+  it("is granted only by the whatsapp complement", () => {
+    expect(tenantFeatures({ complements: ["whatsapp"] })).toContain("whatsapp");
+  });
+});

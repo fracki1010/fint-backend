@@ -1,4 +1,6 @@
 const Setting = require("../models/setting.model");
+const Tenant = require("../models/tenant.model");
+const { tenantFeatures } = require("../config/complementConfig");
 
 const WORKER_URL = process.env.WORKER_URL || "http://localhost:3001";
 const WORKER_INTERNAL_SECRET = process.env.WORKER_INTERNAL_SECRET || "";
@@ -27,6 +29,12 @@ const resolveTenantBySender = async (senderId) => {
     return { senderNumber, access: "denied", tenantId: null };
   if (matches.length > 1)
     return { senderNumber, access: "ambiguous", tenantId: null };
+
+  // The assistant is a paid complement: the tenant must have it active, not just the switch on.
+  const tenant = await Tenant.findById(matches[0].tenant).select("complements").lean();
+  if (!tenantFeatures(tenant).includes("whatsapp")) {
+    return { senderNumber, access: "feature_disabled", tenantId: null };
+  }
 
   return { senderNumber, access: "allowed", tenantId: matches[0].tenant };
 };

@@ -77,6 +77,15 @@ exports.handleWebhook = async (req, res) => {
       return;
     }
 
+    if (senderAccess.access === "feature_disabled") {
+      console.log(`⛔ Complemento WhatsApp inactivo: ${from}`);
+      await sendMessage(
+        from,
+        "El asistente de WhatsApp no está activo para esta empresa. Contacta al administrador.",
+      );
+      return;
+    }
+
     if (senderAccess.access !== "allowed" || !senderAccess.tenantId) {
       console.log(`⛔ Acceso denegado: ${from}`);
       await sendMessage(
