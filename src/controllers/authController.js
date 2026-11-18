@@ -14,6 +14,7 @@ const {
   deriveEnabledFeatures,
   deriveLimits,
   tenantFeatures,
+  tenantLimits,
 } = require("../config/complementConfig");
 
 const generateToken = (userId) => {
@@ -45,11 +46,11 @@ const toAuthResponse = async (user) => {
             name: tenant.name,
             plan: tenant.plan,
             status: tenant.status,
-            limits: tenant.limits ? {
-              maxUsers: serializeLimit(tenant.limits.maxUsers),
-              maxProducts: serializeLimit(tenant.limits.maxProducts),
-              maxOrdersPerMonth: serializeLimit(tenant.limits.maxOrdersPerMonth),
-            } : undefined,
+            limits: {
+              maxUsers: serializeLimit(tenantLimits(tenant).maxUsers),
+              maxProducts: serializeLimit(tenantLimits(tenant).maxProducts),
+              maxOrdersPerMonth: serializeLimit(tenantLimits(tenant).maxOrdersPerMonth),
+            },
             enabledFeatures: tenantFeatures(tenant),
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,
@@ -174,7 +175,7 @@ exports.me = async (req, res) => {
             name: tenant.name,
             plan: tenant.plan,
             status: tenant.status,
-            limits: tenant.limits,
+            limits: tenantLimits(tenant),
             enabledFeatures: tenantFeatures(tenant),
             usage: tenant.usage,
             trialEndsAt: tenant.trialEndsAt,

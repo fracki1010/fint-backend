@@ -151,11 +151,22 @@ function computeTotalPrice(complements = []) {
 // enabledFeatures field is not used for access, so it cannot drift from the plan.
 const tenantFeatures = (tenant) => deriveEnabledFeatures(tenant?.complements || []);
 
+// Effective limits: complement limits, with superadmin overrides on top (null = no override).
+const tenantLimits = (tenant) => {
+  const limits = { ...deriveLimits(tenant?.complements || []) };
+  const overrides = tenant?.limitOverrides?.toObject?.() ?? tenant?.limitOverrides ?? {};
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== null && value !== undefined) limits[key] = value;
+  }
+  return limits;
+};
+
 module.exports = {
   COMPLEMENTS,
   APP_BASE,
   deriveEnabledFeatures,
   tenantFeatures,
+  tenantLimits,
   deriveLimits,
   computeTotalPrice,
 };

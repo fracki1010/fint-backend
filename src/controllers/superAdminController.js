@@ -364,7 +364,12 @@ const updateTenant = async (req, res) => {
     if (status) updates.status = status;
     
     // Update custom limits (override complement defaults)
-    if (limits) updates.limits = { ...tenant.limits, ...limits };
+    if (limits) {
+      updates.limitOverrides = {
+        ...(tenant.limitOverrides?.toObject?.() ?? tenant.limitOverrides ?? {}),
+        ...limits,
+      };
+    }
     
 
     // Update billing

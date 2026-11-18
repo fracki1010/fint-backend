@@ -30,6 +30,13 @@ const tenantSchema = new mongoose.Schema(
       maxOrdersPerMonth: { type: Number, default: 1000 },
     },
     
+    // Superadmin overrides on top of the complement limits (null = use the complements)
+    limitOverrides: {
+      maxUsers: { type: Number, default: null },
+      maxProducts: { type: Number, default: null },
+      maxOrdersPerMonth: { type: Number, default: null },
+    },
+
     // Billing Information
     billing: {
       email: { type: String, trim: true },
