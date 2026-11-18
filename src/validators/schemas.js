@@ -58,7 +58,7 @@ const createClientBody = z.object({
   ...clientPayloadBase,
   name: z.string().trim().min(1, "Nombre requerido"),
   phone: z.string().trim().min(3, "Teléfono requerido"),
-  taxId: z.string().trim().min(1, "Documento fiscal requerido"),
+  taxId: z.string().trim().optional(),
 });
 
 const updateClientBody = z.object(clientPayloadBase);
