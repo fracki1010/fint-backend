@@ -44,7 +44,7 @@ const idParam = z.object({ id: objectId });
 const clientPayloadBase = {
   name: z.string().trim().min(1, "Nombre requerido").optional(),
   phone: z.string().trim().min(3, "Teléfono requerido").optional(),
-  taxId: z.string().trim().min(1, "Documento fiscal requerido").optional(),
+  taxId: z.string().trim().optional(),
   email: z.string().trim().email("Email inválido").optional().or(z.literal("")),
   address: z.string().trim().optional(),
   fiscalAddress: z.string().trim().optional(),

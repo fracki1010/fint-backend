@@ -212,13 +212,6 @@ exports.updateClient = async (req, res) => {
       });
     }
 
-    if (!nextTaxId) {
-      return sendError(res, {
-        status: 400,
-        code: "CLIENT_TAX_ID_REQUIRED",
-        message: "El documento fiscal del cliente es obligatorio",
-      });
-    }
 
     Object.assign(client, {
       name: req.body.name?.trim() ?? client.name,
