@@ -860,7 +860,7 @@ const buildRouterPrompt = (conversationContext) => `
             12. Recomendación de reposición: { "intent": "RECOMENDAR_REPOSICION" }
             13. Consultar cliente: { "intent": "CONSULTAR_CLIENTE", "client": { "name": "..." } }
             14. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
-            15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
+            15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }. Si pide la última venta ("la factura de la última venta", "pasame la factura de recién") usa "orderNumber": "ULTIMA".
             16. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
 
             Reglas de lenguaje natural:
@@ -1117,6 +1117,35 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
     // --- REGLA 2: ¿HAY UNA ACCIÓN PENDIENTE DE COMPLETAR? ---
     if (client.pendingAction && lastSavedAt && Date.now() - new Date(lastSavedAt).getTime() > PENDING_ACTION_TTL_MS) {
       client.pendingAction = null;
+      await client.save();
+    }
+
+    // Respuesta a "¿Querés la factura en PDF?" tras registrar una venta.
+    if (client.pendingAction?.intent === "ENVIAR_FACTURA") {
+      const pendingOrderId = client.pendingAction.orderId;
+      const answer = quickConfirmation(messageBody);
+      client.pendingAction = null;
+
+      if (answer === "CONFIRMAR" || answer === "CANCELAR") {
+        let msg = "Listo, no te mando la factura.";
+        if (answer === "CONFIRMAR") {
+          msg = "No pude enviar la factura PDF.";
+          try {
+            const order = await Order.findOne({ _id: pendingOrderId, tenant: tenantId }).lean();
+            if (order && typeof options.sendInvoicePdf === "function") {
+              await sendInvoicePdfForOrder({ order, tenantId, options });
+              msg = "🧾 Factura PDF enviada.";
+            }
+          } catch (invoiceError) {
+            console.error("No se pudo enviar la factura PDF:", invoiceError);
+          }
+        }
+        appendConversationEntry(client, "user", messageBody);
+        appendConversationEntry(client, "assistant", msg);
+        await client.save();
+        return msg;
+      }
+      // Cualquier otra cosa: se descarta la pregunta y se sigue con el mensaje normal.
       await client.save();
     }
 
@@ -1990,22 +2019,11 @@ Si no hay cambios, omite "product".`;
           }
 
           if (typeof options.sendInvoicePdf === "function") {
-            try {
-              await sendInvoicePdfForOrder({
-                order: {
-                  ...newOrder.toObject(),
-                  client: draft.clientId,
-                  items: itemsParaGuardar,
-                  totalAmount,
-                },
-                tenantId,
-                options,
-              });
-              resp += "\n🧾 Factura PDF enviada.";
-            } catch (invoiceError) {
-              console.error("No se pudo enviar la factura PDF:", invoiceError);
-              resp += "\n⚠️ La venta se guardó, pero no pude enviar la factura PDF.";
-            }
+            client.pendingAction = {
+              intent: "ENVIAR_FACTURA",
+              orderId: String(newOrder._id),
+            };
+            resp += "\n🧾 ¿Querés que te mande la factura en PDF? (sí/no)";
           }
 
           await notifyTenantUsers(tenantId, {
@@ -2367,7 +2385,12 @@ Si no hay cambios, omite "product".`;
       }
 
       case "FACTURA_VENTA": {
-        const requestedOrderRef = (classification?.order?.orderNumber || "").toString().trim();
+        let requestedOrderRef = (classification?.order?.orderNumber || "").toString().trim();
+        // "la última venta" / "la venta de recién": resolve to the most recent sale of the tenant.
+        if (!requestedOrderRef || /^(ultim[ao]|última|ultima|last)$/i.test(requestedOrderRef)) {
+          const lastOrder = await Order.findOne({ tenant: tenantId }).sort({ createdAt: -1 }).lean();
+          requestedOrderRef = lastOrder ? String(lastOrder.orderNumber || lastOrder._id) : "";
+        }
         if (!requestedOrderRef) {
           const msg =
             "Indícame el número de venta. Ejemplo: 'factura VTA-000123' o pide detalle de ventas del cliente.";
