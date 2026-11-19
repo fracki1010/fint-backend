@@ -7,7 +7,7 @@ services:
     environment:
       NODE_ENV: production
       # Apunta al worker por nombre de servicio (red interna Docker)
-      WORKER_URL: http://whatsapp-worker:3001
+      WORKER_URL: http://whatsapp-worker:3011
     volumes:
       - uploads:/app/temp
     restart: unless-stopped
