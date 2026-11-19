@@ -4,9 +4,14 @@ require("dotenv").config();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// The org's on-demand limit is 1000 output tokens/min, so every call stays small.
+// Router and extraction replies are short JSON or one sentence; 300 is enough.
+const DEFAULT_MAX_OUTPUT_TOKENS = 300;
+
 const processText = async (
   prompt,
   systemMessage = "Eres un asistente de gestión de ventas.",
+  { maxTokens = DEFAULT_MAX_OUTPUT_TOKENS } = {},
 ) => {
   try {
     const chatCompletion = await groq.chat.completions.create({
@@ -17,8 +22,7 @@ const processText = async (
       // Llama 3.3 is no longer served to our key; qwen scored best on scripts/eval/router-cases.js.
       model: process.env.GROQ_CHAT_MODEL || "qwen/qwen3.8-27b",
       temperature: 0.5,
-      // The org's on-demand limit is 1000 output tokens/min; the default expected output exceeds it.
-      max_tokens: 800,
+      max_tokens: maxTokens,
     });
     return chatCompletion.choices[0]?.message?.content || "";
   } catch (error) {
