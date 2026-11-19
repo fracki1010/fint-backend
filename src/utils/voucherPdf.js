@@ -11,9 +11,10 @@ const DEFAULTS = {
     bold: "Helvetica-Bold",
   },
   colors: {
-    primary: "#111",
-    secondary: "#555",
-    light: "#C9CDD4",
+    primary: "#111827",
+    secondary: "#6B7280",
+    light: "#E5E7EB",
+    panel: "#F9FAFB",
     accent: "#2563EB",
   },
 };
@@ -105,7 +106,13 @@ const numberToWords = (num) => {
   return result;
 };
 
-const LOGO_BOX = { width: 80, height: 60 };
+const LOGO_BOX = { width: 84, height: 56 };
+
+const TYPE_LABELS = {
+  invoice: "Factura",
+  delivery_note: "Remito",
+  receipt: "Recibo",
+};
 
 // Only PNG and JPEG are embeddable by PDFKit; the service validates the same formats on save
 const parseLogoBuffer = (dataUrl = "") => {
@@ -120,259 +127,321 @@ class PdfLayout {
     this.marginX = options.marginX || DEFAULTS.margin;
     this.pageWidth = doc.page.width;
     this.pageHeight = doc.page.height;
-    this.pageBottom = this.pageHeight - this.marginX;
+    this.contentWidth = this.pageWidth - this.marginX * 2;
+    this.pageBottom = this.pageHeight - this.marginX - 40; // keeps clear of the footer
+    this.rowCount = 0;
   }
 
   ensureSpace(neededHeight = 24) {
     if (this.doc.y + neededHeight <= this.pageBottom) return;
     this.doc.addPage();
     this.doc.y = this.marginX;
+    // A table that continues on a new page repeats its header
+    if (this.activeColumns) this.renderTableHeader();
   }
 
   drawHeader(store = {}, voucherType = "", voucherNumber = "") {
-    const startY = this.doc.y;
+    const doc = this.doc;
+    const top = this.marginX;
     const storeName = store.storeName || "Fint Guard";
     const logo = parseLogoBuffer(store.logoDataUrl);
-    const textX = logo ? this.marginX + LOGO_BOX.width + 14 : this.marginX;
+    const textX = logo ? this.marginX + LOGO_BOX.width + 16 : this.marginX;
+    const rightW = 190;
+    const rightX = this.pageWidth - this.marginX - rightW;
+    const leftW = rightX - textX - 20;
 
-    // Store info - left side, logo first when the company has one
     if (logo) {
       try {
-        this.doc.image(logo, this.marginX, startY, { fit: [LOGO_BOX.width, LOGO_BOX.height] });
+        doc.image(logo, this.marginX, top, { fit: [LOGO_BOX.width, LOGO_BOX.height] });
       } catch (error) {
         // Unreadable logo: the voucher is still issued without it
       }
     }
 
-    this.doc
+    doc
+      .font(DEFAULTS.fonts.bold)
+      .fontSize(18)
+      .fillColor(DEFAULTS.colors.primary)
+      .text(storeName, textX, top, { width: leftW });
+    const nameBottom = doc.y;
+
+    const details = [
+      store.taxId ? `CUIT/NIT: ${store.taxId}` : null,
+      store.address || null,
+      store.phone ? `Tel: ${store.phone}` : null,
+      store.email || null,
+    ].filter(Boolean);
+
+    doc
+      .font(DEFAULTS.fonts.regular)
+      .fontSize(9)
+      .fillColor(DEFAULTS.colors.secondary)
+      .text(details.join("   ·   "), textX, nameBottom + 4, { width: leftW, lineGap: 2 });
+    const detailsBottom = doc.y;
+
+    // Voucher type and number, right aligned
+    doc
+      .font(DEFAULTS.fonts.bold)
+      .fontSize(8)
+      .fillColor(DEFAULTS.colors.accent)
+      .text((TYPE_LABELS[voucherType] || "Documento").toUpperCase(), rightX, top, {
+        width: rightW,
+        align: "right",
+        characterSpacing: 1.5,
+      });
+    doc
       .font(DEFAULTS.fonts.bold)
       .fontSize(20)
       .fillColor(DEFAULTS.colors.primary)
-      .text(storeName, textX, startY, { width: this.pageWidth - textX - 220 });
+      .text(`N° ${voucherNumber}`, rightX, doc.y + 2, { width: rightW, align: "right" });
+    const rightBottom = doc.y;
 
-    this.doc.moveDown(0.2);
-    this.doc.font(DEFAULTS.fonts.bold).fontSize(12);
-    this.doc.font(DEFAULTS.fonts.regular).fontSize(10);
+    const logoBottom = logo ? top + LOGO_BOX.height : 0;
+    const ruleY = Math.max(detailsBottom, rightBottom, logoBottom) + 14;
 
-    if (store.taxId) {
-      this.doc.text(`CUIT/NIT: ${store.taxId}`, textX, this.doc.y);
-    }
-    if (store.phone) {
-      this.doc.text(`Teléfono: ${store.phone}`, textX, this.doc.y);
-    }
-    if (store.email) {
-      this.doc.text(`Email: ${store.email}`, textX, this.doc.y);
-    }
-    if (store.address) {
-      this.doc.text(`Dirección: ${store.address}`, textX, this.doc.y);
-    }
+    doc
+      .moveTo(this.marginX, ruleY)
+      .lineTo(this.pageWidth - this.marginX, ruleY)
+      .lineWidth(1.5)
+      .strokeColor(DEFAULTS.colors.accent)
+      .stroke()
+      .lineWidth(1);
 
-    // Voucher type and number - right side
-    const typeLabels = {
-      invoice: "FACTURA",
-      delivery_note: "REMITO",
-      receipt: "RECIBO",
-    };
+    doc.y = ruleY + 18;
+  }
 
-    const rightX = this.pageWidth - 200;
-    this.doc.y = startY;
-
+  drawSectionTitle(title) {
+    this.ensureSpace(30);
     this.doc
       .font(DEFAULTS.fonts.bold)
-      .fontSize(24)
+      .fontSize(8)
       .fillColor(DEFAULTS.colors.accent)
-      .text(typeLabels[voucherType] || "DOCUMENTO", rightX, startY, {
-        width: 160,
-        align: "right",
-      });
-
-    this.doc.moveDown(0.3);
-    this.doc
-      .font(DEFAULTS.fonts.bold)
-      .fontSize(14)
-      .fillColor(DEFAULTS.colors.primary)
-      .text(`N° ${voucherNumber}`, rightX, this.doc.y, {
-        width: 160,
-        align: "right",
-      });
-
-    this.doc.y = Math.max(this.doc.y, startY + 80);
-    this.doc.moveDown(0.5);
+      .text(title.toUpperCase(), this.marginX, this.doc.y, { characterSpacing: 1 });
+    this.doc.y += 8;
   }
 
   drawClientInfo(client = {}, order = {}) {
-    this.ensureSpace(60);
-    const startY = this.doc.y;
-
-    this.doc
-      .font(DEFAULTS.fonts.bold)
-      .fontSize(11)
-      .fillColor(DEFAULTS.colors.primary)
-      .text("CLIENTE", this.marginX, startY);
-
-    this.doc.moveDown(0.2);
-    this.doc.font(DEFAULTS.fonts.regular).fontSize(10);
+    const doc = this.doc;
+    const gap = 16;
+    const cardWidth = (this.contentWidth - gap) / 2;
+    const cardHeight = 92;
+    this.ensureSpace(cardHeight + 20);
+    const top = doc.y;
 
     const clientName = client.name || client.phone || "Consumidor final";
-    this.doc.text(`Nombre: ${clientName}`, this.marginX, this.doc.y);
+    const clientLines = [
+      ["Nombre", clientName],
+      ["Documento", client.taxId],
+      ["Teléfono", client.phone],
+      ["Dirección", client.fiscalAddress || client.address],
+    ].filter(([, value]) => value);
 
-    if (client.taxId) {
-      this.doc.text(`Documento: ${client.taxId}`, this.marginX, this.doc.y);
-    }
-    if (client.phone) {
-      this.doc.text(`Teléfono: ${client.phone}`, this.marginX, this.doc.y);
-    }
-    if (client.fiscalAddress || client.address) {
-      this.doc.text(`Dirección: ${client.fiscalAddress || client.address}`, this.marginX, this.doc.y);
-    }
+    const orderLines = [
+      ["Orden", order.orderNumber || order._id || "N/A"],
+      ["Fecha", formatDate(order.createdAt)],
+      ["Pago", order.paymentStatus || "-"],
+    ];
 
-    // Order info - right side
-    const rightX = this.pageWidth - 200;
-    this.doc.y = startY;
+    const writeCard = (x, title, lines) => {
+      doc.roundedRect(x, top, cardWidth, cardHeight, 6).fill(DEFAULTS.colors.panel);
 
-    this.doc
-      .font(DEFAULTS.fonts.bold)
-      .fontSize(11)
-      .text("ORDEN", rightX, startY, { width: 160, align: "right" });
+      doc
+        .font(DEFAULTS.fonts.bold)
+        .fontSize(7.5)
+        .fillColor(DEFAULTS.colors.accent)
+        .text(title.toUpperCase(), x + 14, top + 12, { characterSpacing: 1, width: cardWidth - 28 });
 
-    this.doc.moveDown(0.2);
-    this.doc.font(DEFAULTS.fonts.regular).fontSize(10);
-    this.doc.text(`N°: ${order.orderNumber || order._id || "N/A"}`, rightX, this.doc.y, {
-      width: 160,
-      align: "right",
-    });
-    this.doc.text(`Fecha: ${formatDate(order.createdAt)}`, rightX, this.doc.y, {
-      width: 160,
-      align: "right",
-    });
+      let y = top + 30;
+      lines.forEach(([label, value]) => {
+        doc
+          .font(DEFAULTS.fonts.bold)
+          .fontSize(8.5)
+          .fillColor(DEFAULTS.colors.secondary)
+          .text(label, x + 14, y, { width: 64 });
+        doc
+          .font(DEFAULTS.fonts.regular)
+          .fontSize(9.5)
+          .fillColor(DEFAULTS.colors.primary)
+          .text(String(value), x + 84, y, { width: cardWidth - 98 });
+        y = doc.y + 4;
+      });
+    };
 
-    this.doc.y = Math.max(this.doc.y, startY + 50);
-    this.doc.moveDown(0.5);
+    writeCard(this.marginX, "Cliente", clientLines);
+    writeCard(this.marginX + cardWidth + gap, "Comprobante", orderLines);
+
+    doc.y = top + cardHeight + 20;
   }
 
   drawFooter() {
-    this.doc.y = this.pageBottom - 30;
-    this.doc
+    const doc = this.doc;
+    const y = this.pageHeight - this.marginX - 14;
+
+    doc
+      .moveTo(this.marginX, y - 8)
+      .lineTo(this.pageWidth - this.marginX, y - 8)
+      .lineWidth(0.5)
+      .strokeColor(DEFAULTS.colors.light)
+      .stroke()
+      .lineWidth(1);
+
+    doc
       .font(DEFAULTS.fonts.regular)
-      .fontSize(8)
+      .fontSize(7.5)
       .fillColor(DEFAULTS.colors.secondary)
       .text(
         "Documento generado automáticamente por Fint Guard. Este comprobante tiene validez fiscal según la normativa vigente.",
         this.marginX,
-        this.doc.y,
-        { align: "center", width: this.pageWidth - this.marginX * 2 },
+        y,
+        { align: "center", width: this.contentWidth },
       );
   }
 
+  // Columns are scaled so every table spans the full content width
+  resolveColumns(columns) {
+    const total = columns.reduce((sum, col) => sum + col.width, 0);
+    const scale = this.contentWidth / total;
+    return columns.map((col) => ({ ...col, width: col.width * scale }));
+  }
+
   drawTableHeader(columns) {
-    this.ensureSpace(28);
-    const y = this.doc.y;
+    this.activeColumns = columns;
+    this.ensureSpace(30);
+    this.renderTableHeader();
+  }
 
-    this.doc.font(DEFAULTS.fonts.bold).fontSize(10).fillColor(DEFAULTS.colors.primary);
+  renderTableHeader() {
+    const doc = this.doc;
+    const cols = this.resolveColumns(this.activeColumns);
+    const y = doc.y;
 
-    let currentX = this.marginX;
-    columns.forEach((col) => {
-      this.doc.text(col.label, currentX, y, {
-        width: col.width,
+    doc.rect(this.marginX, y, this.contentWidth, 22).fill(DEFAULTS.colors.primary);
+
+    doc.font(DEFAULTS.fonts.bold).fontSize(8).fillColor("#FFFFFF");
+    let x = this.marginX;
+    cols.forEach((col) => {
+      doc.text(col.label.toUpperCase(), x + 8, y + 7, {
+        width: col.width - 16,
         align: col.align || "left",
+        characterSpacing: 0.6,
       });
-      currentX += col.width;
+      x += col.width;
     });
 
-    // Draw line under header
-    this.doc
-      .moveTo(this.marginX, y + 14)
-      .lineTo(this.pageWidth - this.marginX, y + 14)
-      .strokeColor(DEFAULTS.colors.light)
-      .stroke();
-
-    this.doc.y = y + 20;
+    doc.y = y + 26;
+    this.rowCount = 0;
   }
 
   drawTableRow(columns, values) {
-    this.doc.font(DEFAULTS.fonts.regular).fontSize(10).fillColor(DEFAULTS.colors.primary);
+    const doc = this.doc;
+    const cols = this.resolveColumns(columns);
 
-    // Calculate row height based on tallest cell
-    let maxHeight = 16;
-    columns.forEach((col, index) => {
-      const value = values[index] || "";
-      const height = this.doc.heightOfString(String(value), { width: col.width - 5 });
-      maxHeight = Math.max(maxHeight, height + 4);
+    doc.font(DEFAULTS.fonts.regular).fontSize(9.5);
+    let contentHeight = 0;
+    cols.forEach((col, index) => {
+      const height = doc.heightOfString(String(values[index] ?? ""), { width: col.width - 16 });
+      contentHeight = Math.max(contentHeight, height);
     });
+    const rowHeight = Math.max(contentHeight + 12, 24);
 
-    this.ensureSpace(maxHeight + 6);
-    const y = this.doc.y;
+    this.ensureSpace(rowHeight + 2);
+    const y = doc.y;
 
-    let currentX = this.marginX;
-    columns.forEach((col, index) => {
-      const value = values[index] || "";
-      this.doc.text(String(value), currentX, y, {
-        width: col.width - 5,
+    // Zebra striping keeps long tables readable without vertical borders
+    if (this.rowCount % 2 === 1) {
+      doc.rect(this.marginX, y, this.contentWidth, rowHeight).fill(DEFAULTS.colors.panel);
+    }
+    this.rowCount += 1;
+
+    doc.font(DEFAULTS.fonts.regular).fontSize(9.5).fillColor(DEFAULTS.colors.primary);
+    let x = this.marginX;
+    cols.forEach((col, index) => {
+      doc.text(String(values[index] ?? ""), x + 8, y + 6, {
+        width: col.width - 16,
         align: col.align || "left",
       });
-      currentX += col.width;
+      x += col.width;
     });
 
-    this.doc.y = y + maxHeight + 4;
+    doc
+      .moveTo(this.marginX, y + rowHeight)
+      .lineTo(this.pageWidth - this.marginX, y + rowHeight)
+      .lineWidth(0.5)
+      .strokeColor(DEFAULTS.colors.light)
+      .stroke()
+      .lineWidth(1);
+
+    doc.y = y + rowHeight;
   }
 
+  // Non-bold rows are plain lines; the bold row is the dark total bar
   drawTotalsSection(totals) {
-    this.ensureSpace(48);
-    this.doc.moveDown(0.4);
+    this.activeColumns = null;
+    const doc = this.doc;
+    const boxWidth = 230;
+    const x = this.pageWidth - this.marginX - boxWidth;
+    const totalsHeight = totals.reduce((sum, t) => sum + (t.bold ? 34 : 22), 0);
 
-    const startX = this.pageWidth - 220;
-    const lineWidth = 200;
-
-    // Draw line above totals
-    this.doc
-      .moveTo(startX - 20, this.doc.y)
-      .lineTo(startX + lineWidth, this.doc.y)
-      .strokeColor(DEFAULTS.colors.light)
-      .stroke();
-
-    this.doc.moveDown(0.4);
+    this.ensureSpace(totalsHeight + 24);
+    let y = doc.y + 12;
 
     totals.forEach((total) => {
-      // Label and value share one baseline; advance by the row's own font size
-      const rowY = this.doc.y;
-      this.doc
-        .font(total.bold ? DEFAULTS.fonts.bold : DEFAULTS.fonts.regular)
-        .fontSize(total.size || 11)
-        .fillColor(DEFAULTS.colors.primary)
-        .text(total.label, startX, rowY, { width: 100, align: "left" });
-      this.doc.text(total.value, startX + 100, rowY, { width: 100, align: "right" });
-      this.doc.y = rowY + (total.size || 11) + 6;
+      if (total.bold) {
+        doc.rect(x, y, boxWidth, 34).fill(DEFAULTS.colors.primary);
+        doc
+          .font(DEFAULTS.fonts.bold)
+          .fontSize(11)
+          .fillColor("#FFFFFF")
+          .text(total.label, x + 12, y + 11, { width: 100 });
+        doc
+          .font(DEFAULTS.fonts.bold)
+          .fontSize(13)
+          .text(total.value, x + 110, y + 10, { width: boxWidth - 122, align: "right" });
+        y += 34;
+      } else {
+        doc
+          .font(DEFAULTS.fonts.regular)
+          .fontSize(9.5)
+          .fillColor(DEFAULTS.colors.secondary)
+          .text(total.label, x + 12, y + 7, { width: 100 });
+        doc
+          .font(DEFAULTS.fonts.regular)
+          .fillColor(DEFAULTS.colors.primary)
+          .text(total.value, x + 110, y + 7, { width: boxWidth - 122, align: "right" });
+        doc
+          .moveTo(x, y + 22)
+          .lineTo(x + boxWidth, y + 22)
+          .lineWidth(0.5)
+          .strokeColor(DEFAULTS.colors.light)
+          .stroke()
+          .lineWidth(1);
+        y += 22;
+      }
     });
 
-    this.doc.moveDown(0.5);
+    doc.y = y + 16;
   }
 }
 
 // Template: Invoice (Factura)
 const generateInvoiceTemplate = async (doc, data) => {
-  const { order = {}, client = {}, store = {}, voucherNumber = "" } = data;
+  const { order = {}, store = {}, client = {}, voucherNumber = "" } = data;
   const layout = new PdfLayout(doc);
 
-  // Header
   layout.drawHeader(store, "invoice", voucherNumber);
   layout.drawClientInfo(client, order);
 
-  // Invoice details
-  layout.ensureSpace(30);
-  doc.font(DEFAULTS.fonts.bold).fontSize(11).text("DETALLE DE FACTURA", layout.marginX, doc.y);
-  doc.moveDown(0.3);
+  layout.drawSectionTitle("Detalle");
 
-  // Table columns
   const columns = [
-    { label: "Producto", width: 200 },
+    { label: "Producto", width: 240 },
     { label: "Cant.", width: 60, align: "right" },
-    { label: "Precio Unit.", width: 90, align: "right" },
-    { label: "Subtotal", width: 100, align: "right" },
+    { label: "Precio unit.", width: 110, align: "right" },
+    { label: "Subtotal", width: 105, align: "right" },
   ];
 
   layout.drawTableHeader(columns);
 
-  // Items
   const items = Array.isArray(order.items) ? order.items : [];
   items.forEach((item) => {
     const qty = Number(item.quantity || 0);
@@ -387,27 +456,26 @@ const generateInvoiceTemplate = async (doc, data) => {
     ]);
   });
 
-  // Totals
   const totalAmount = Number(order.totalAmount || 0);
   const taxRate = Number(store.taxRate || 21);
   const subtotal = totalAmount / (1 + taxRate / 100);
   const taxAmount = totalAmount - subtotal;
 
   layout.drawTotalsSection([
-    { label: "Subtotal:", value: formatMoney(subtotal), bold: false, size: 10 },
-    { label: `IVA (${taxRate}%):`, value: formatMoney(taxAmount), bold: false, size: 10 },
-    { label: "TOTAL:", value: formatMoney(totalAmount), bold: true, size: 14 },
+    { label: "Subtotal", value: formatMoney(subtotal), bold: false },
+    { label: `IVA (${taxRate}%)`, value: formatMoney(taxAmount), bold: false },
+    { label: "TOTAL", value: formatMoney(totalAmount), bold: true },
   ]);
 
-  // Amount in words
   layout.ensureSpace(30);
   doc
     .font(DEFAULTS.fonts.regular)
-    .fontSize(10)
+    .fontSize(9)
     .fillColor(DEFAULTS.colors.secondary)
-    .text(`Son: ${numberToWords(totalAmount).toUpperCase()} PESOS`, layout.marginX, doc.y);
+    .text(`Son: ${numberToWords(totalAmount).toUpperCase()} PESOS`, layout.marginX, doc.y, {
+      width: layout.contentWidth,
+    });
 
-  // Legal footer
   layout.drawFooter();
 };
 
