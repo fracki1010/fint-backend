@@ -7,6 +7,13 @@ const StockMovement = require("../models/stockMovement.model");
 const User = require("../models/user.model");
 const voucherService = require("../services/voucherService");
 const { createAndDispatchNotification } = require("../services/notificationService");
+const {
+  loadRotationFacts,
+  findUnsupportedNumbers,
+  renderFallbackSummary,
+  buildAdvisorSystemPrompt,
+  buildAdvisorUserPrompt,
+} = require("../services/inventoryAnalyticsService");
 
 let cachedWhatsAppOwner = null;
 const MEMORY_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
@@ -854,6 +861,7 @@ const buildRouterPrompt = (conversationContext) => `
             14. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
             15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }. Si pide la última venta ("la factura de la última venta", "pasame la factura de recién") usa "orderNumber": "ULTIMA".
             16. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
+            17. Análisis de rotación y compras: { "intent": "ANALISIS_INVENTARIO" }. Usalo para preguntas sobre qué rota, qué está parado, qué conviene comprar o no comprar, tendencias de ventas o capital inmovilizado.
 
             Reglas de lenguaje natural:
             - El usuario escribe informal, con errores de tipeo y modismos rioplatenses. Interpretá la intención aunque la palabra esté mal escrita: "Stoxk", "stok", "estock" significan stock; "listame", "mostrame", "pasame" son pedidos de listado.
@@ -2641,6 +2649,38 @@ Si no hay cambios, omite "product".`;
         }
         message += "Sugerencia: prioriza primero los de menor cobertura.";
         const response = message.trim();
+        appendConversationEntry(client, "assistant", response);
+        await client.save();
+        return response;
+      }
+
+      case "ANALISIS_INVENTARIO": {
+        const tenantObjectId = toObjectId(tenantId);
+        if (!tenantObjectId) {
+          return "No pude calcular el análisis por un problema de identificación de la empresa.";
+        }
+
+        const facts = await loadRotationFacts(tenantObjectId);
+        let response = renderFallbackSummary(facts);
+
+        if (facts.enoughData) {
+          try {
+            const raw = await processText(
+              buildAdvisorUserPrompt(facts, messageBody),
+              buildAdvisorSystemPrompt(),
+              { maxTokens: 500 },
+            );
+            // Some Qwen builds wrap reasoning in <think> blocks; the user should not see them.
+            const reply = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+            // Numbers the facts do not contain mean the model invented data: keep the calculated summary.
+            if (reply && findUnsupportedNumbers(reply, facts).length === 0) {
+              response = `📦 *Análisis de rotación*\n${reply}`;
+            }
+          } catch (advisorError) {
+            console.error("Asesor de inventario sin respuesta del modelo:", advisorError);
+          }
+        }
+
         appendConversationEntry(client, "assistant", response);
         await client.save();
         return response;
