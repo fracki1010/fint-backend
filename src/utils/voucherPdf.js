@@ -105,6 +105,14 @@ const numberToWords = (num) => {
   return result;
 };
 
+const LOGO_BOX = { width: 80, height: 60 };
+
+// Only PNG and JPEG are embeddable by PDFKit; the service validates the same formats on save
+const parseLogoBuffer = (dataUrl = "") => {
+  const match = /^data:image\/(png|jpeg);base64,(.+)$/.exec(dataUrl || "");
+  return match ? Buffer.from(match[2], "base64") : null;
+};
+
 // Shared layout helpers
 class PdfLayout {
   constructor(doc, options = {}) {
@@ -124,29 +132,39 @@ class PdfLayout {
   drawHeader(store = {}, voucherType = "", voucherNumber = "") {
     const startY = this.doc.y;
     const storeName = store.storeName || "Fint Guard";
+    const logo = parseLogoBuffer(store.logoDataUrl);
+    const textX = logo ? this.marginX + LOGO_BOX.width + 14 : this.marginX;
 
-    // Store info - left side
+    // Store info - left side, logo first when the company has one
+    if (logo) {
+      try {
+        this.doc.image(logo, this.marginX, startY, { fit: [LOGO_BOX.width, LOGO_BOX.height] });
+      } catch (error) {
+        // Unreadable logo: the voucher is still issued without it
+      }
+    }
+
     this.doc
       .font(DEFAULTS.fonts.bold)
       .fontSize(20)
       .fillColor(DEFAULTS.colors.primary)
-      .text(storeName, this.marginX, startY);
+      .text(storeName, textX, startY, { width: this.pageWidth - textX - 220 });
 
     this.doc.moveDown(0.2);
     this.doc.font(DEFAULTS.fonts.bold).fontSize(12);
     this.doc.font(DEFAULTS.fonts.regular).fontSize(10);
 
     if (store.taxId) {
-      this.doc.text(`CUIT/NIT: ${store.taxId}`, this.marginX, this.doc.y);
+      this.doc.text(`CUIT/NIT: ${store.taxId}`, textX, this.doc.y);
     }
     if (store.phone) {
-      this.doc.text(`Teléfono: ${store.phone}`, this.marginX, this.doc.y);
+      this.doc.text(`Teléfono: ${store.phone}`, textX, this.doc.y);
     }
     if (store.email) {
-      this.doc.text(`Email: ${store.email}`, this.marginX, this.doc.y);
+      this.doc.text(`Email: ${store.email}`, textX, this.doc.y);
     }
     if (store.address) {
-      this.doc.text(`Dirección: ${store.address}`, this.marginX, this.doc.y);
+      this.doc.text(`Dirección: ${store.address}`, textX, this.doc.y);
     }
 
     // Voucher type and number - right side
@@ -315,15 +333,15 @@ class PdfLayout {
     this.doc.moveDown(0.4);
 
     totals.forEach((total) => {
+      // Label and value share one baseline; advance by the row's own font size
+      const rowY = this.doc.y;
       this.doc
         .font(total.bold ? DEFAULTS.fonts.bold : DEFAULTS.fonts.regular)
         .fontSize(total.size || 11)
         .fillColor(DEFAULTS.colors.primary)
-        .text(total.label, startX, this.doc.y, { width: 100, align: "left" })
-        .text(total.value, startX + 100, this.doc.y - 14, {
-          width: 100,
-          align: "right",
-        });
+        .text(total.label, startX, rowY, { width: 100, align: "left" });
+      this.doc.text(total.value, startX + 100, rowY, { width: 100, align: "right" });
+      this.doc.y = rowY + (total.size || 11) + 6;
     });
 
     this.doc.moveDown(0.5);

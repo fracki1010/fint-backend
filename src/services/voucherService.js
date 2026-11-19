@@ -181,6 +181,7 @@ const generateVoucher = async (orderId, type, userId, options = {}) => {
     email: settings?.email || "",
     address: settings?.address || "",
     taxRate: settings?.taxRate || 21,
+    logoDataUrl: settings?.logoDataUrl || "",
   };
 
   // Get client info

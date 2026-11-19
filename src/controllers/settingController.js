@@ -7,6 +7,22 @@ const clampNumber = (value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) =>
   return Math.min(Math.max(numeric, min), max);
 };
 
+// The global express.json() limit is 100kb, so the stored logo must stay under that once encoded.
+const MAX_LOGO_DATA_URL_LENGTH = 95000;
+const LOGO_DATA_URL_PATTERN = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/;
+
+const resolveLogoDataUrl = (value, fallback = "") => {
+  if (value === undefined) return fallback;
+  if (value === null || value === "") return "";
+  const logo = value.toString();
+  if (logo.length > MAX_LOGO_DATA_URL_LENGTH || !LOGO_DATA_URL_PATTERN.test(logo)) {
+    const error = new Error("Logo inválido: usá una imagen PNG o JPG liviana");
+    error.status = 400;
+    throw error;
+  }
+  return logo;
+};
+
 const sanitizeText = (value, fallback = "") => {
   if (value === undefined || value === null) return fallback;
   return value.toString().trim();
@@ -182,11 +198,13 @@ exports.updateSettings = async (req, res) => {
         updateData.invoiceTerms,
         settings?.invoiceTerms || "",
       ),
+      logoDataUrl: resolveLogoDataUrl(updateData.logoDataUrl, settings?.logoDataUrl || ""),
     };
 
     const sanitizedData = {
       ...updateData,
       whatsappNumberFormat: resolvedWhatsAppNumberFormat,
+      logoDataUrl: institutionalData.logoDataUrl,
       storeName: institutionalData.storeName,
       taxId: institutionalData.taxId,
       fiscalCondition: institutionalData.fiscalCondition,
@@ -245,6 +263,7 @@ exports.updateSettings = async (req, res) => {
     await settings.save();
     res.json(settings);
   } catch (error) {
+    if (error.status === 400) return res.status(400).json({ message: error.message });
     return handleServerError(res, error, "Error al actualizar configuración");
   }
 };

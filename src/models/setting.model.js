@@ -16,6 +16,7 @@ const settingSchema = new mongoose.Schema(
     email: { type: String },
     supportEmail: { type: String }, // Email remitente para notificaciones
     invoiceTerms: { type: String, default: "" }, // Condiciones comerciales
+    logoDataUrl: { type: String, default: "" }, // PNG/JPEG data URL shown on vouchers
     admin: {
       fullName: { type: String, default: "" },
       role: { type: String, default: "Administrador" },

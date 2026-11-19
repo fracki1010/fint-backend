@@ -3,10 +3,9 @@ const { processText } = require("../services/groqService");
 const Client = require("../models/client.model");
 const { Product, UNIT_OPTIONS } = require("../models/product.model");
 const Order = require("../models/order.model");
-const Setting = require("../models/setting.model");
 const StockMovement = require("../models/stockMovement.model");
 const User = require("../models/user.model");
-const { generateInvoicePdf } = require("../utils/invoicePdf");
+const voucherService = require("../services/voucherService");
 const { createAndDispatchNotification } = require("../services/notificationService");
 
 let cachedWhatsAppOwner = null;
@@ -761,22 +760,15 @@ const sendInvoicePdfForOrder = async ({ order, tenantId, options = {} }) => {
   const orderPayload =
     typeof order?.toObject === "function" ? order.toObject() : { ...(order || {}) };
 
-  const [clientData, storeData] = await Promise.all([
-    orderPayload.client
-      ? Client.findOne({ _id: orderPayload.client, tenant: tenantId }).lean()
-      : null,
-    Setting.findOne({ tenant: tenantId }).select("storeName taxId phone email").lean(),
-  ]);
-
-  const pdfPath = await generateInvoicePdf({
-    order: orderPayload,
-    client: clientData || {},
-    store: storeData || {},
+  // Same numbering (F-000001) and layout as the Vouchers module; an existing invoice is reused.
+  const owner = await getWhatsAppOwnerId();
+  const voucher = await voucherService.generateVoucher(orderPayload._id, "invoice", owner.userId, {
+    tenantId,
   });
 
   await options.sendInvoicePdf({
-    pdfPath,
-    caption: `Factura ${resolveOrderIdentifier(orderPayload)} · Total ${formatMoney(orderPayload.totalAmount)}`,
+    pdfPath: voucher.filePath,
+    caption: `Factura ${voucher.number} · Total ${formatMoney(orderPayload.totalAmount)}`,
   });
 
   return { sent: true };
