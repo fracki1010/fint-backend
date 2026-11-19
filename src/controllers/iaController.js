@@ -862,6 +862,18 @@ const buildRouterPrompt = (conversationContext) => `
             14. Detalle ventas por cliente: { "intent": "DETALLE_VENTAS_CLIENTE", "client": { "name": "..." }, "limit": 5 }
             15. Sugerir factura de venta: { "intent": "FACTURA_VENTA", "order": { "orderNumber": "VTA-000123" } }
             16. Charla general: { "intent": "CHARLA_GENERAL", "message": "respuesta breve y útil orientada al negocio" }
+
+            Reglas de lenguaje natural:
+            - El usuario escribe informal, con errores de tipeo y modismos rioplatenses. Interpretá la intención aunque la palabra esté mal escrita: "Stoxk", "stok", "estock" significan stock; "listame", "mostrame", "pasame" son pedidos de listado.
+            - Saludos y mensajes sociales ("hola", "hola loco", "todo bien?", "gracias") son CHARLA_GENERAL: responde con calidez, en una o dos frases, y ofrece ayuda con stock, ventas o clientes.
+            - "Listame los productos" o "mostrame el catálogo" es LISTAR_PRODUCTOS. "Listame los clientes" es LISTAR_CLIENTES.
+            - Si el mensaje es ambiguo, usa CHARLA_GENERAL y pregunta qué necesita, sin inventar datos ni acciones.
+            - Nunca devuelvas texto fuera del JSON.
+
+            Ejemplos:
+            "Hola loco" -> { "intent": "CHARLA_GENERAL", "message": "¡Hola! ¿En qué te ayudo? Puedo revisar stock, ventas o clientes." }
+            "Stoxk" -> { "intent": "CHARLA_GENERAL", "message": "¿Querés consultar el stock actual, ver productos con bajo inventario o listar todos los productos?" }
+            "Listame los productos" -> { "intent": "LISTAR_PRODUCTOS", "filters": { "lowStockOnly": false, "limit": 10 } }
             `;
 
 const handleIncomingMessage = async (phone, messageBody, options = {}) => {
