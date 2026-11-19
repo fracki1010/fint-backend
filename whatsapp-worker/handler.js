@@ -28,9 +28,17 @@ const getStatus = () => ({
   isClientActive: Boolean(client),
 });
 
+// Pinned WhatsApp Web build: the latest build breaks the QR flow of whatsapp-web.js 1.34.x.
+const WA_WEB_VERSION = process.env.WA_WEB_VERSION || "2.3000.1054721061-alpha";
+
 const createClient = () =>
   new Client({
     authStrategy: new LocalAuth(),
+    webVersion: WA_WEB_VERSION,
+    webVersionCache: {
+      type: "remote",
+      remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${WA_WEB_VERSION}.html`,
+    },
     puppeteer: {
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
       ...(process.env.PUPPETEER_EXECUTABLE_PATH && {
