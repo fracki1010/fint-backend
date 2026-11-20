@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Tenant = require("../models/tenant.model");
 const User = require("../models/user.model");
 const { Product } = require("../models/product.model");
@@ -97,7 +98,13 @@ exports.activateComplements = async (req, res) => {
       }
     }
 
-    const tenant = await Tenant.findById(req.user.tenant);
+    // Superadmin acts on the tenant named in the body; without it, on the caller's own tenant.
+    const targetTenantId = req.body.tenantId || req.user.tenant;
+    if (!mongoose.isValidObjectId(targetTenantId)) {
+      return res.status(400).json({ success: false, message: "tenantId inválido" });
+    }
+
+    const tenant = await Tenant.findById(targetTenantId);
     if (!tenant) {
       return res.status(404).json({ success: false, message: "Tenant no encontrado" });
     }
