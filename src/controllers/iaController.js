@@ -14,6 +14,16 @@ const {
   buildAdvisorSystemPrompt,
   buildAdvisorUserPrompt,
 } = require("../services/inventoryAnalyticsService");
+const {
+  QUESTIONS,
+  parsePaymentStatus,
+  parsePaymentMethod,
+  parseDelivery,
+  parseYesNo,
+  parsePaidAmount,
+  buildOrderStatusFields,
+  describeWizardAnswers,
+} = require("../services/orderWizardService");
 
 let cachedWhatsAppOwner = null;
 const MEMORY_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
@@ -678,7 +688,7 @@ const buildOrderDraft = async (tenantId, orderData = {}) => {
   };
 };
 
-const formatOrderDraftMessage = (draft) => {
+const formatOrderDraftMessage = (draft, { confirm = true } = {}) => {
   const lines = ["🧾 Resumen de orden:", `Cliente: ${draft.client.name || draft.client.phone}`];
   draft.items.forEach((item, index) => {
     lines.push(
@@ -707,8 +717,96 @@ const formatOrderDraftMessage = (draft) => {
     );
   }
 
-  lines.push("¿Confirmo y creo la venta? (Sí/No)");
+  if (confirm) lines.push("¿Confirmo y creo la venta? (Sí/No)");
   return lines.join("\n");
+};
+
+// Starts the step-by-step questions. Nothing is saved until every answer is in and the user confirms.
+const startOrderWizard = (client, draft, canInvoice) => {
+  client.pendingAction = {
+    intent: "NUEVO_PEDIDO_WIZARD",
+    step: "PAYMENT_STATUS",
+    canInvoice,
+    orderDraft: {
+      clientId: draft.client._id,
+      clientName: draft.client.name || draft.client.phone,
+      items: draft.items,
+      totalAmount: draft.totalAmount,
+      missingProducts: draft.missingProducts,
+      insufficientStock: draft.insufficientStock,
+    },
+  };
+  return `${formatOrderDraftMessage(draft, { confirm: false })}\n\n${QUESTIONS.PAYMENT_STATUS}`;
+};
+
+const buildOrderConfirmation = (orderDraft) => {
+  const base = formatOrderDraftMessage(
+    {
+      client: { name: orderDraft.clientName },
+      items: orderDraft.items,
+      totalAmount: orderDraft.totalAmount,
+      missingProducts: orderDraft.missingProducts,
+      insufficientStock: orderDraft.insufficientStock,
+    },
+    { confirm: false },
+  );
+  const answers = describeWizardAnswers({
+    payment: orderDraft.payment,
+    delivered: orderDraft.delivered,
+    invoice: orderDraft.invoice,
+    total: orderDraft.totalAmount,
+  });
+  return [base, ...answers, "¿Confirmo y creo la venta? (Sí/No)"].join("\n");
+};
+
+// Reads one answer and returns the next question, or { done: true } once every step is answered.
+const advanceOrderWizard = (wizard, answer, total) => {
+  switch (wizard.step) {
+    case "PAYMENT_STATUS": {
+      const status = parsePaymentStatus(answer);
+      if (!status) return { reply: `No te entendí.\n${QUESTIONS.PAYMENT_STATUS}` };
+      wizard.payment = { status, method: null, paidAmount: status === "paid" ? total : null };
+      if (status === "pending") wizard.step = "DELIVERY";
+      else if (status === "partial") wizard.step = "PAID_AMOUNT";
+      else wizard.step = "PAYMENT_METHOD";
+      return { reply: QUESTIONS[wizard.step] };
+    }
+    case "PAID_AMOUNT": {
+      const amount = parsePaidAmount(answer, total);
+      if (amount === null) {
+        return { reply: `Ese monto no sirve: tiene que ser mayor a 0 y menor a $${total}.\n${QUESTIONS.PAID_AMOUNT}` };
+      }
+      wizard.payment.paidAmount = amount;
+      wizard.step = "PAYMENT_METHOD";
+      return { reply: QUESTIONS.PAYMENT_METHOD };
+    }
+    case "PAYMENT_METHOD": {
+      const method = parsePaymentMethod(answer);
+      if (!method) return { reply: `No te entendí.\n${QUESTIONS.PAYMENT_METHOD}` };
+      wizard.payment.method = method;
+      wizard.step = "DELIVERY";
+      return { reply: QUESTIONS.DELIVERY };
+    }
+    case "DELIVERY": {
+      const delivered = parseDelivery(answer);
+      if (delivered === null) return { reply: `No te entendí.\n${QUESTIONS.DELIVERY}` };
+      wizard.delivered = delivered;
+      if (wizard.canInvoice) {
+        wizard.step = "INVOICE";
+        return { reply: QUESTIONS.INVOICE };
+      }
+      wizard.invoice = false;
+      return { done: true };
+    }
+    case "INVOICE": {
+      const invoice = parseYesNo(answer);
+      if (invoice === null) return { reply: `Respondé Sí o No.\n${QUESTIONS.INVOICE}` };
+      wizard.invoice = invoice;
+      return { done: true };
+    }
+    default:
+      return { reply: "No pude seguir con el pedido. Empezá de nuevo." };
+  }
 };
 
 const notifyTenantUsers = async (tenantId, payload) => {
@@ -1043,17 +1141,11 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
             return msg;
           }
 
-          client.pendingAction = {
-            intent: "NUEVO_PEDIDO",
-            orderDraft: {
-              clientId: draft.client._id,
-              items: draft.items,
-              totalAmount: draft.totalAmount,
-              missingProducts: draft.missingProducts,
-              insufficientStock: draft.insufficientStock,
-            },
-          };
-          const msg = formatOrderDraftMessage(draft);
+          const msg = startOrderWizard(
+            client,
+            draft,
+            typeof options.sendInvoicePdf === "function",
+          );
           appendConversationEntry(client, "assistant", msg);
           await client.save();
           return msg;
@@ -1147,6 +1239,30 @@ const handleIncomingMessage = async (phone, messageBody, options = {}) => {
       }
       // Cualquier otra cosa: se descarta la pregunta y se sigue con el mensaje normal.
       await client.save();
+    }
+
+    if (client.pendingAction?.intent === "NUEVO_PEDIDO_WIZARD") {
+      const wizard = client.pendingAction;
+      let msg;
+
+      if (isCancelMessage(messageBody)) {
+        client.pendingAction = null;
+        msg = "❌ Venta cancelada. No se guardó nada.";
+      } else {
+        const result = advanceOrderWizard(wizard, messageBody, wizard.orderDraft.totalAmount);
+        if (result.done) {
+          // Every answer is in: move to the final confirmation, which is the only step that writes.
+          const orderDraft = { ...wizard.orderDraft, payment: wizard.payment, delivered: wizard.delivered, invoice: wizard.invoice };
+          client.pendingAction = { intent: "NUEVO_PEDIDO", orderDraft };
+          msg = buildOrderConfirmation(orderDraft);
+        } else {
+          msg = result.reply;
+        }
+      }
+
+      appendConversationEntry(client, "assistant", msg);
+      await client.save();
+      return msg;
     }
 
     if (client.pendingAction?.intent === "CREAR_CLIENTE_WIZARD") {
@@ -1572,17 +1688,11 @@ Si no hay cambios, omite "product".`;
           }
         }
 
-        client.pendingAction = {
-          intent: "NUEVO_PEDIDO",
-          orderDraft: {
-            clientId: draft.client._id,
-            items: draft.items,
-            totalAmount: draft.totalAmount,
-            missingProducts: draft.missingProducts,
-            insufficientStock: draft.insufficientStock,
-          },
-        };
-        const msg = formatOrderDraftMessage(draft);
+        const msg = startOrderWizard(
+          client,
+          draft,
+          typeof options.sendInvoicePdf === "function",
+        );
         appendConversationEntry(client, "assistant", msg);
         await client.save();
         return msg;
@@ -1917,6 +2027,15 @@ Si no hay cambios, omite "product".`;
           return msg;
         }
 
+        // Every answer must come from the wizard; never save a sale with payment or delivery guessed.
+        const answers = classification.orderDraft || {};
+        if (!answers.payment || answers.delivered === undefined || answers.invoice === undefined) {
+          const msg = "No guardé la venta: faltan el pago, la entrega o la factura. Empezá el pedido de nuevo.";
+          appendConversationEntry(client, "assistant", msg);
+          await client.save();
+          return msg;
+        }
+
         const session = await mongoose.startSession();
         try {
           session.startTransaction();
@@ -1986,13 +2105,11 @@ Si no hay cambios, omite "product".`;
                 client: draft.clientId,
                 items: itemsParaGuardar,
                 totalAmount,
-                status: "Entregado",
-                salesStatus: "Confirmada",
-                paymentStatus: "Pagado",
-                deliveryStatus: "Entregada",
-                confirmedAt: new Date(),
-                paidAt: new Date(),
-                deliveredAt: new Date(),
+                ...buildOrderStatusFields({
+                  payment: answers.payment,
+                  total: totalAmount,
+                  delivered: answers.delivered,
+                }),
                 stockApplied: true,
                 stockAppliedAt: new Date(),
                 source: "WhatsApp",
@@ -2018,12 +2135,21 @@ Si no hay cambios, omite "product".`;
             resp += `⚠️ Faltó: ${noEncontrados.join(", ")}`;
           }
 
-          if (typeof options.sendInvoicePdf === "function") {
-            client.pendingAction = {
-              intent: "ENVIAR_FACTURA",
-              orderId: String(newOrder._id),
-            };
-            resp += "\n🧾 ¿Querés que te mande la factura en PDF? (sí/no)";
+          resp += `\n${describeWizardAnswers({
+            payment: answers.payment,
+            delivered: answers.delivered,
+            invoice: answers.invoice,
+            total: totalAmount,
+          }).join("\n")}`;
+
+          if (answers.invoice && typeof options.sendInvoicePdf === "function") {
+            try {
+              await sendInvoicePdfForOrder({ order: newOrder, tenantId, options });
+              resp += "\n🧾 Factura PDF enviada.";
+            } catch (invoiceError) {
+              console.error("No se pudo enviar la factura PDF del pedido:", invoiceError);
+              resp += "\n⚠️ No pude enviar la factura; podés pedirla desde Ventas.";
+            }
           }
 
           await notifyTenantUsers(tenantId, {
@@ -2703,4 +2829,4 @@ Si no hay cambios, omite "product".`;
   }
 };
 
-module.exports = { handleIncomingMessage, buildRouterPrompt, safeJsonParse, quickConfirmation };
+module.exports = { handleIncomingMessage, buildRouterPrompt, safeJsonParse, quickConfirmation, advanceOrderWizard, buildOrderConfirmation };
