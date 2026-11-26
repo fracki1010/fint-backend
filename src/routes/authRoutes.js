@@ -24,6 +24,7 @@ router.post(
   validateRequest({ body: loginBody }),
   authController.login,
 );
+router.post("/activate", loginRateLimitMiddleware, require("../controllers/invitationController").activate);
 router.get("/me", authMiddleware, authController.me);
 router.post(
   "/users",

@@ -2,6 +2,7 @@ const bcrypt = require("bcryptjs");
 
 const User = require("../models/user.model");
 const Location = require("../models/location.model");
+const { unusablePasswordHash } = require("../services/invitationService");
 const { sendError, handleServerError } = require("../utils/http");
 
 // Empty locationId means "sees every location". Admins always see every location.
@@ -56,7 +57,9 @@ exports.createTeamMember = async (req, res) => {
     const cleanName = fullName?.toString().trim();
     const cleanPassword = password?.toString();
 
-    if (!cleanName || !cleanEmail || !cleanPassword || cleanPassword.length < 6) {
+    // With withInvitation the person sets their own password from the link, so none is needed here.
+    const withInvitation = req.body.withInvitation === true;
+    if (!cleanName || !cleanEmail || (!withInvitation && (!cleanPassword || cleanPassword.length < 6))) {
       return sendError(res, {
         status: 400,
         code: "VALIDATION_ERROR",
@@ -81,7 +84,9 @@ exports.createTeamMember = async (req, res) => {
       return sendError(res, { status: 400, code: "INVALID_LOCATION", message: placement.error });
     }
 
-    const passwordHash = await bcrypt.hash(cleanPassword, 10);
+    const passwordHash = withInvitation
+      ? await unusablePasswordHash()
+      : await bcrypt.hash(cleanPassword, 10);
     const member = await User.create({
       tenant: tenantId,
       fullName: cleanName,
