@@ -108,6 +108,7 @@ function createApp(options = {}) {
     require("./routes/paymentOrderRoutes"),
   );
   app.use("/api/cost-centers", authMiddleware, planMiddleware.requireFeature("cost_centers"), require("./routes/costCenterRoutes"));
+  app.use("/api/locations", authMiddleware, planMiddleware.requireFeature("multi_location"), require("./routes/locationRoutes"));
   app.use(
     "/api/treasury",
     authMiddleware,
