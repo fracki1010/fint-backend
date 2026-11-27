@@ -1,7 +1,20 @@
 const bcrypt = require("bcryptjs");
 
 const User = require("../models/user.model");
+const Location = require("../models/location.model");
+const { unusablePasswordHash } = require("../services/invitationService");
 const { sendError, handleServerError } = require("../utils/http");
+
+// Empty locationId means "sees every location". Admins always see every location.
+const resolveMemberLocation = async (tenantId, locationId, role) => {
+  if (!locationId) return { location: null };
+  if (role === "admin") {
+    return { error: "Un administrador ve todos los lugares: no se le asigna uno." };
+  }
+  const place = await Location.findOne({ _id: locationId, tenant: tenantId, isActive: true }).lean();
+  if (!place) return { error: "Lugar no encontrado." };
+  return { location: place._id };
+};
 
 const ROLE_LABELS = {
   admin: "Administrador",
@@ -44,7 +57,9 @@ exports.createTeamMember = async (req, res) => {
     const cleanName = fullName?.toString().trim();
     const cleanPassword = password?.toString();
 
-    if (!cleanName || !cleanEmail || !cleanPassword || cleanPassword.length < 6) {
+    // With withInvitation the person sets their own password from the link, so none is needed here.
+    const withInvitation = req.body.withInvitation === true;
+    if (!cleanName || !cleanEmail || (!withInvitation && (!cleanPassword || cleanPassword.length < 6))) {
       return sendError(res, {
         status: 400,
         code: "VALIDATION_ERROR",
@@ -64,13 +79,21 @@ exports.createTeamMember = async (req, res) => {
       });
     }
 
-    const passwordHash = await bcrypt.hash(cleanPassword, 10);
+    const placement = await resolveMemberLocation(tenantId, req.body.locationId, cleanRole);
+    if (placement.error) {
+      return sendError(res, { status: 400, code: "INVALID_LOCATION", message: placement.error });
+    }
+
+    const passwordHash = withInvitation
+      ? await unusablePasswordHash()
+      : await bcrypt.hash(cleanPassword, 10);
     const member = await User.create({
       tenant: tenantId,
       fullName: cleanName,
       email: cleanEmail,
       passwordHash,
       role: cleanRole,
+      location: placement.location,
       isSuperAdmin: false,
     });
 
@@ -102,6 +125,16 @@ exports.updateTeamMember = async (req, res) => {
 
     if (req.body.fullName) member.fullName = req.body.fullName.trim();
     if (req.body.role && validRoles.includes(req.body.role)) member.role = req.body.role;
+
+    if (req.body.locationId !== undefined || req.body.role !== undefined) {
+      const requestedLocation =
+        req.body.locationId !== undefined ? req.body.locationId : member.location;
+      const placement = await resolveMemberLocation(tenantId, requestedLocation, member.role);
+      if (placement.error) {
+        return sendError(res, { status: 400, code: "INVALID_LOCATION", message: placement.error });
+      }
+      member.location = placement.location;
+    }
     if (typeof req.body.isActive === "boolean") member.isActive = req.body.isActive;
     if (req.body.password && req.body.password.length >= 6) {
       member.passwordHash = await bcrypt.hash(req.body.password, 10);
