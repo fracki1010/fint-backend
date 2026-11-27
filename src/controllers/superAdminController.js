@@ -577,6 +577,8 @@ const DEFAULT_DESCRIPTIONS = {
     "Reportes personalizables por fecha, producto, vendedor y estado. Exportación a Excel y PDF.",
   listas_precios:
     "Hasta 5 listas de precios diferenciadas. Asignación automática por cliente (mayoristas, minoristas, etc.).",
+  multi_location:
+    "Stock por depósito y por gimnasio o sucursal. Cada usuario ve solo su lugar y el dueño ve todo, con transferencias desde el depósito central.",
   centros_costo:
     "Categorizá gastos por centro de costo, analizá rentabilidad por producto y visualizá distribución de costos.",
   conciliacion:
