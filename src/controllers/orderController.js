@@ -14,6 +14,7 @@ const voucherService = require("../services/voucherService");
 const cashClosingService = require("../services/cashClosingService");
 const { HttpError, sendError, handleServerError } = require("../utils/http");
 const { findUncoveredItem } = require("../utils/stockDemand");
+const { findCentralDepositId, adjustLocationStock } = require("../services/stockLocationService");
 
 // Valid price tier values
 const VALID_PRICE_TIERS = ["retail", "wholesale", "distributor"];
@@ -256,6 +257,21 @@ const resolveOrderItemsWithCostSnapshot = async (items, tenantId, session, clien
   return normalizedItems;
 };
 
+// Moves the place-level stock of the order's place, or of the central deposit when the sale has no place.
+// Runs in the same transaction as the tenant total. Tenants without deposits skip it.
+const moveOrderPlaceStock = async (order, tenantId, session, productId, delta) => {
+  const placeId = order.location || (await findCentralDepositId(tenantId));
+  if (!placeId) return;
+  try {
+    await adjustLocationStock({ tenantId, locationId: placeId, productId, delta, session });
+  } catch (error) {
+    if (error.code === "INSUFFICIENT_LOCATION_STOCK") {
+      throw new HttpError(409, "INSUFFICIENT_STOCK", "Stock insuficiente en el lugar de venta");
+    }
+    throw error;
+  }
+};
+
 const applyStockForOrder = async (order, session, reasonPrefix, source, tenantId) => {
   for (const item of order.items) {
     let product = null;
@@ -302,6 +318,7 @@ const applyStockForOrder = async (order, session, reasonPrefix, source, tenantId
 
     product.stock = stockAfter;
     await product.save({ session });
+    await moveOrderPlaceStock(order, tenantId, session, product._id, -qtyToDeduct);
 
     await new StockMovement({
       tenant: tenantId,
@@ -356,6 +373,7 @@ const revertStockForOrder = async (order, session, source, tenantId) => {
 
     product.stock = stockAfter;
     await product.save({ session });
+    await moveOrderPlaceStock(order, tenantId, session, product._id, qtyToRevert);
 
     await new StockMovement({
       tenant: tenantId,
@@ -603,6 +621,7 @@ exports.createOrder = async (req, res) => {
 
     const newOrder = new Order({
       tenant: tenantId,
+      location: req.user?.location || null,
       client,
       items: normalizedItems,
       totalAmount,

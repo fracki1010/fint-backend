@@ -15,6 +15,16 @@ const resolveUserByToken = async (token) => {
   return user;
 };
 
+// A sucursal user sells and sees stock: read the catalog and its own place, create sales.
+const SUCURSAL_ROUTES = [
+  { method: "GET", path: /^\/api\/(products|clients|locations|settings|orders)(\/|$|\?)/ },
+  { method: "POST", path: /^\/api\/orders(\/|$|\?)/ },
+];
+const isSucursalAllowed = (method, url) => {
+  const path = String(url || "").split("?")[0];
+  return SUCURSAL_ROUTES.some((rule) => rule.method === method && rule.path.test(path));
+};
+
 const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || "";
@@ -40,6 +50,13 @@ const authMiddleware = async (req, res, next) => {
     }
 
     req.user = user;
+    if (user.role === "sucursal" && !isSucursalAllowed(req.method, req.originalUrl)) {
+      return sendError(res, {
+        status: 403,
+        code: "FORBIDDEN",
+        message: "Tu usuario de sucursal solo puede vender y ver stock.",
+      });
+    }
     return next();
   } catch {
     return sendError(res, {
@@ -52,3 +69,4 @@ const authMiddleware = async (req, res, next) => {
 
 module.exports = authMiddleware;
 module.exports.resolveUserByToken = resolveUserByToken;
+module.exports.isSucursalAllowed = isSucursalAllowed;

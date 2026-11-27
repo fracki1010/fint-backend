@@ -8,6 +8,8 @@ const orderSchema = new mongoose.Schema(
       index: true,
       required: true,
     },
+    // Place the sale was made from; the stock of that place is the one that moves.
+    location: { type: mongoose.Schema.Types.ObjectId, ref: "Location", default: null },
     client: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Client",
