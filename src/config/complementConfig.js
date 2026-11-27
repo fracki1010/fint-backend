@@ -60,6 +60,12 @@ const COMPLEMENTS = {
     id: "listas_precios",
     name: "Múltiples Listas de Precios",
     price: 2000,
+    features: [],
+  },
+  multi_location: {
+    id: "multi_location",
+    name: "Múltiples Lugares",
+    price: 2000,
     features: ["multi_location"],
   },
   centros_costo: {
