@@ -28,6 +28,12 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Set for users tied to one gym or branch. Empty means the user sees every location.
+    location: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Location",
+      default: null,
+    },
     role: {
       type: String,
       enum: ["admin", "ventas", "deposito", "contabilidad", "lectura"],

@@ -15,9 +15,12 @@ const stockMovementSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["ENTRADA", "SALIDA", "MERMA", "AJUSTE"],
+      enum: ["ENTRADA", "SALIDA", "MERMA", "AJUSTE", "TRANSFERENCIA"],
       required: true,
     },
+    // Only for TRANSFERENCIA: where the stock left from and where it arrived.
+    fromLocation: { type: mongoose.Schema.Types.ObjectId, ref: "Location", default: null },
+    toLocation: { type: mongoose.Schema.Types.ObjectId, ref: "Location", default: null },
     quantity: { type: Number, required: true }, // Siempre positivo; el type define si suma o resta
     stockBefore: { type: Number, required: true },
     stockAfter: { type: Number, required: true },
