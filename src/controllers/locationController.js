@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Location = require("../models/location.model");
 const LocationStock = require("../models/locationStock.model");
 const { transferStock, loadDepositStock } = require("../services/stockLocationService");
@@ -62,6 +63,11 @@ exports.createLocation = async (req, res) => {
   }
 };
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const MAX_PAGE_SIZE = 200;
+
+// Without paging params it keeps the full list (used by the transfer picker).
+// With q, page or limit it returns one page plus totals, so large catalogs stay light.
 exports.getLocationStock = async (req, res) => {
   try {
     const scope = resolveLocationScope(req.user, req.params.id);
@@ -69,23 +75,73 @@ exports.getLocationStock = async (req, res) => {
       return sendError(res, { status: 400, code: "LOCATION_REQUIRED", message: "Indicá un lugar." });
     }
 
-    const rows = await LocationStock.find({
-      tenant: req.user.tenant,
-      location: scope,
-      stock: { $gt: 0 },
-    })
-      .populate("product", "name unitOfMeasure price")
-      .sort({ updatedAt: -1 })
-      .lean();
+    const paged = ["q", "page", "limit"].some((key) => req.query[key] !== undefined);
 
-    return res.json(
-      rows.map((row) => ({
-        productId: row.product?._id,
-        name: row.product?.name,
-        unitOfMeasure: row.product?.unitOfMeasure || "unidad",
+    if (!paged) {
+      const rows = await LocationStock.find({ tenant: req.user.tenant, location: scope, stock: { $gt: 0 } })
+        .populate("product", "name unitOfMeasure price")
+        .sort({ updatedAt: -1 })
+        .lean();
+
+      return res.json(
+        rows.map((row) => ({
+          productId: row.product?._id,
+          name: row.product?.name,
+          unitOfMeasure: row.product?.unitOfMeasure || "unidad",
+          stock: row.stock,
+        })),
+      );
+    }
+
+    const term = String(req.query.q || "").trim();
+    // aggregate does not cast ids like find does, so match on real ObjectIds here.
+    const base = {
+      tenant: new mongoose.Types.ObjectId(req.user.tenant),
+      location: new mongoose.Types.ObjectId(scope),
+      stock: { $gt: 0 },
+    };
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), MAX_PAGE_SIZE);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
+    const matchName = term
+      ? [{ $match: { name: { $regex: escapeRegex(term), $options: "i" } } }]
+      : [];
+
+    const [[result = {}] = [], [totals = {}] = []] = await Promise.all([
+      LocationStock.aggregate([
+        { $match: base },
+        { $lookup: { from: "products", localField: "product", foreignField: "_id", as: "product" } },
+        { $unwind: "$product" },
+        { $project: { stock: 1, name: "$product.name", unitOfMeasure: "$product.unitOfMeasure" } },
+        ...matchName,
+        { $sort: { name: 1 } },
+        {
+          $facet: {
+            items: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+            count: [{ $count: "total" }],
+          },
+        },
+      ]),
+      LocationStock.aggregate([
+        { $match: base },
+        { $group: { _id: null, units: { $sum: "$stock" }, products: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const total = result.count?.[0]?.total ?? 0;
+    return res.json({
+      items: (result.items || []).map((row) => ({
+        productId: row._id,
+        name: row.name,
+        unitOfMeasure: row.unitOfMeasure || "unidad",
         stock: row.stock,
       })),
-    );
+      total,
+      page,
+      pages: Math.max(1, Math.ceil(total / limit)),
+      totalProducts: totals.products ?? 0,
+      totalUnits: totals.units ?? 0,
+    });
   } catch (error) {
     if (error.code === "FORBIDDEN_LOCATION") return sendScopeError(res, error);
     return handleServerError(res, error, "Error al consultar stock del lugar");
