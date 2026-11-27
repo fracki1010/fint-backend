@@ -19,6 +19,9 @@ const resolveMemberLocation = async (tenantId, locationId, role) => {
   return { location: place._id };
 };
 
+// Every role a team member can hold. Missing one here silently downgrades it to "lectura".
+const VALID_ROLES = ["admin", "ventas", "deposito", "contabilidad", "lectura", "sucursal"];
+
 const ROLE_LABELS = {
   sucursal: "Sucursal",
   admin: "Administrador",
@@ -71,7 +74,7 @@ exports.createTeamMember = async (req, res) => {
       });
     }
 
-    const validRoles = ["admin", "ventas", "deposito", "contabilidad", "lectura"];
+    const validRoles = VALID_ROLES;
     const cleanRole = validRoles.includes(role) ? role : "lectura";
 
     const existing = await User.findOne({ email: cleanEmail });
@@ -125,7 +128,7 @@ exports.updateTeamMember = async (req, res) => {
       });
     }
 
-    const validRoles = ["admin", "ventas", "deposito", "contabilidad", "lectura"];
+    const validRoles = VALID_ROLES;
 
     if (req.body.fullName) member.fullName = req.body.fullName.trim();
     if (req.body.role && validRoles.includes(req.body.role)) member.role = req.body.role;
@@ -171,3 +174,5 @@ exports.deleteTeamMember = async (req, res) => {
     return handleServerError(res, error, "Error al desactivar usuario");
   }
 };
+
+exports.VALID_ROLES = VALID_ROLES;
