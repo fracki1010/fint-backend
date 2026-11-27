@@ -7,6 +7,9 @@ const { sendError, handleServerError } = require("../utils/http");
 
 // Empty locationId means "sees every location". Admins always see every location.
 const resolveMemberLocation = async (tenantId, locationId, role) => {
+  if (!locationId && role === "sucursal") {
+    return { error: "Un usuario de sucursal debe tener un lugar asignado." };
+  }
   if (!locationId) return { location: null };
   if (role === "admin") {
     return { error: "Un administrador ve todos los lugares: no se le asigna uno." };
@@ -17,6 +20,7 @@ const resolveMemberLocation = async (tenantId, locationId, role) => {
 };
 
 const ROLE_LABELS = {
+  sucursal: "Sucursal",
   admin: "Administrador",
   ventas: "Ventas",
   deposito: "Depósito",

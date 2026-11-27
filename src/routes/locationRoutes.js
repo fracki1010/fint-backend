@@ -9,6 +9,7 @@ const router = express.Router();
 router.get("/", locationController.listLocations);
 router.post("/", requireRole("admin"), locationController.createLocation);
 router.get("/:id/stock", locationController.getLocationStock);
+router.post("/:id/stock-load", requireRole("admin"), locationController.loadStock);
 router.post("/transfers", requireRole("admin"), locationController.transfer);
 
 module.exports = router;

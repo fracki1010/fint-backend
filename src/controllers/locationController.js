@@ -1,6 +1,6 @@
 const Location = require("../models/location.model");
 const LocationStock = require("../models/locationStock.model");
-const { transferStock } = require("../services/stockLocationService");
+const { transferStock, loadDepositStock } = require("../services/stockLocationService");
 const { resolveLocationScope } = require("../services/locationScope");
 const { sendError, handleServerError } = require("../utils/http");
 
@@ -89,6 +89,24 @@ exports.getLocationStock = async (req, res) => {
   } catch (error) {
     if (error.code === "FORBIDDEN_LOCATION") return sendScopeError(res, error);
     return handleServerError(res, error, "Error al consultar stock del lugar");
+  }
+};
+
+exports.loadStock = async (req, res) => {
+  try {
+    const result = await loadDepositStock({
+      tenantId: req.user.tenant,
+      depositId: req.params.id,
+      productId: req.body.productId,
+      quantity: req.body.quantity,
+      reason: req.body.reason?.toString().trim() || undefined,
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    if (TRANSFER_ERROR_CODES.has(error.code) || error.code === "TARGET_NOT_DEPOSIT") {
+      return sendError(res, { status: 400, code: error.code, message: error.message });
+    }
+    return handleServerError(res, error, "Error al cargar stock");
   }
 };
 
